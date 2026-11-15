@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ValleyVis</title>
+  <meta name="description" content="Auto path visualizer for ValleyLib + Pedro Pathing 3 (FTC BIOBUZZ).">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23111827'/%3E%3Cpath d='M6 24 C 10 6, 22 6, 26 24' stroke='%23facc15' stroke-width='3' fill='none'/%3E%3Ccircle cx='6' cy='24' r='3' fill='%2338bdf8'/%3E%3Ccircle cx='26' cy='24' r='3' fill='%23f87171'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">◆</span> ValleyVis <span class="tag">ValleyLib · Pedro 3 · BIOBUZZ</span></div>
+    <input id="projectName" class="project-name" aria-label="Routine name" spellcheck="false">
+    <div class="seg" id="allianceToggle" role="group" aria-label="Preview alliance">
+      <button data-alliance="blue" class="blue">Blue</button>
+      <button data-alliance="red" class="red">Red</button>
+    </div>
+    <div class="spacer"></div>
+    <select id="presetSelect" aria-label="Load an example routine"><option value="">Examples…</option></select>
+    <button id="btnNew" title="New routine">New</button>
+    <button id="btnOpen" title="Open a .vvis.json file">Open</button>
+    <button id="btnSave" title="Download this routine as .vvis.json">Save</button>
+    <button id="btnUndo" title="Undo (Ctrl+Z)">↶</button>
+    <button id="btnRedo" title="Redo (Ctrl+Shift+Z)">↷</button>
+    <button id="btnExport" class="primary" title="Generate Java">Export Java</button>
+    <button id="btnSettings" title="Robot, motion, commands and code settings">Settings</button>
+    <input type="file" id="fileInput" accept=".json,application/json" hidden>
+  </header>
+
+  <main class="layout">
+    <section class="field-wrap">
+      <div class="field-area" id="fieldArea">
+        <canvas id="field" tabindex="0" aria-label="Field editor"></canvas>
+        <div class="field-overlay top-left" id="coordReadout"></div>
+        <div class="field-overlay top-right view-toggles" id="viewToggles"></div>
+        <div class="field-overlay bottom-left" id="toolHint"></div>
+      </div>
+      <div class="playback" id="playback"></div>
+    </section>
+
+    <aside class="sidebar">
+      <nav class="tabs" id="tabs">
+        <button data-tab="routine">Routine</button>
+        <button data-tab="zones">Zones</button>
+        <button data-tab="problems">Problems <span class="badge" id="problemCount"></span></button>
+      </nav>
+      <div class="tab-body" id="tabBody"></div>
+    </aside>
+  </main>
+
+  <div class="overlay" id="settingsOverlay" hidden></div>
+  <div class="overlay" id="exportOverlay" hidden></div>
+  <div class="toast" id="toast" hidden></div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
