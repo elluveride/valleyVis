@@ -285,5 +285,15 @@ export function simulate(resolved, settings) {
     if (park && tt >= cutAt) return { ...parkPose(park, tt), itemIndex: -2 };
     return routinePoseAt(Math.min(tt, cutAt));
   };
-  return { items, routineTotal, cutAt, park, end, poseAt, issues };
+  /** What is happening at time tt: the step on screen and the commands running right then. */
+  const activeAt = (tt) => {
+    if (tt >= cutAt - 1e-9) {
+      if (park && tt < park.t1) return { phase: 'park', item: null, spans: [] };
+      return { phase: 'done', item: null, spans: [] };
+    }
+    const item = items.find((it) => tt < it.t1) || null;
+    if (!item) return { phase: 'done', item: null, spans: [] };
+    return { phase: 'routine', item, spans: (item.spans || []).filter((sp) => tt >= sp.t0 && tt < sp.t1) };
+  };
+  return { items, routineTotal, cutAt, park, end, poseAt, activeAt, issues };
 }

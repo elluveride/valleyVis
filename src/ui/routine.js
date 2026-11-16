@@ -1,6 +1,8 @@
 // Routine tab: project info, start pose, the ordered step list and each step's editor.
 
+import { javaIdent } from '../codegen.js';
 import { displayDeg } from '../geometry.js';
+import { namedEndPose } from '../poses.js';
 import { findStep } from '../store.js';
 import { PATH_COLORS } from '../render.js';
 import { fmtSec, h, roundTo, uid } from '../util.js';
@@ -246,6 +248,22 @@ function pathEditor(app, step, m, item, rstep) {
     fld('y', exprInput(app, `${key}.y`, last?.end.y, (v, o) => m((s) => { s.segments[s.segments.length - 1].end.y = v; }, o))),
     fld('heading °', exprInput(app, `${key}.h`, step.endH, (v, o) => m((s) => { s.endH = v; }, o))),
   ]));
+  const settings = app.store.state.settings;
+  const poses = (settings.points || []).filter((pt) => pt.h !== null && pt.h !== undefined && pt.h !== '');
+  if (poses.length) {
+    const tied = namedEndPose(step, settings);
+    body.push(h('div.grid2', {}, [
+      fld('Named pose', selectInput(`${key}.pose`, [['', 'custom'], ...poses.map((pt) => [pt.name, pt.name])], tied ? tied.name : '', (v) => m((s) => {
+        const pt = poses.find((q) => q.name === v);
+        if (!pt) { delete s.endRef; return; }
+        s.segments[s.segments.length - 1].end = { x: pt.x, y: pt.y };
+        s.endH = pt.h;
+        s.endRef = pt.name;
+        if (!s.endName || /^pose\d+$/.test(s.endName)) s.endName = javaIdent(pt.name);
+      })), 'End this path on a shared pose from Settings → Named points. You can also drag the path end near one and it snaps.'),
+      h('div.fld', {}, [h('span', { text: ' ' }), h('div.hint.mono', { text: tied ? (tied.java ? `exports as ${tied.java}` : 'no Java set: exports as numbers') : '' })]),
+    ]));
+  }
   body.push(h('div.section-title', { text: 'Shape' }));
   body.push(segmentsEditor(app, step, m, numVal));
   body.push(h('div.section-title', { text: 'Heading' }));

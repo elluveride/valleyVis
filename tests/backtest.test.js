@@ -8,6 +8,7 @@ import { buildPath, deg2rad } from '../src/geometry.js';
 import { makeInterpolator } from '../src/heading.js';
 import { PRESETS } from '../src/presets.js';
 import { resolveProject } from '../src/resolve.js';
+import { namedEndPose, nearestPoint } from '../src/poses.js';
 import { looksLikeProject, normalizeProject, normalizeSettings } from '../src/schema.js';
 import { maxAchievableVelocity, profilePath, simulate } from '../src/simulate.js';
 
@@ -190,4 +191,62 @@ test('shapes Pedro cannot follow are flagged the way the real library behaves', 
   assert.ok(iss.some((i) => i.throws === true && /Max speed/.test(i.msg)));
   // a normal curve is clean
   assert.equal(issuesFor([curve([{ x: 50, y: 20 }], { x: 80, y: 60 })], { mode: 'tangent' }).length, 0);
+});
+
+test('a path that ends on a named pose exports the pose\'s Java', () => {
+  const p = emptyProject();
+  const path = { id: 'p', type: 'path', name: 'toFlower', endName: 'flower', segments: [{ type: 'line', controls: [], end: { x: 96, y: 'L/2' } }], endH: -90, endRef: 'xFlower', heading: { mode: 'linear' }, during: [], markers: [] };
+  p.steps = [path];
+  assert.equal(namedEndPose(path, DEFAULT_SETTINGS).name, 'xFlower');
+  let out = generateJava(p, DEFAULT_SETTINGS, resolveProject(p, DEFAULT_SETTINGS, 'blue'));
+  assert.match(out.methods, /Pose flower = AutoPaths\.xFlower\(f\);/);
+  assert.ok(out.imports.includes('org.firstinspires.ftc.team2844simple.autos.AutoPaths'));
+  // moved off the pose (or turned): back to plain coordinates, and no stray import
+  for (const change of [(s) => { s.segments[0].end.x = 97; }, (s) => { s.endH = 0; }, (s) => { s.endRef = 'nope'; }, (s) => { delete s.endRef; }]) {
+    const q = JSON.parse(JSON.stringify(p));
+    change(q.steps[0]);
+    assert.equal(namedEndPose(q.steps[0], DEFAULT_SETTINGS), null);
+    out = generateJava(q, DEFAULT_SETTINGS, resolveProject(q, DEFAULT_SETTINGS, 'blue'));
+    assert.match(out.methods, /Pose flower = f\.of\(/);
+    assert.ok(!out.imports.includes('org.firstinspires.ftc.team2844simple.autos.AutoPaths'));
+  }
+  // the tie follows the robot size because the pose is an expression
+  const bigger = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+  bigger.robot.length = 18;
+  assert.equal(namedEndPose(path, bigger).name, 'xFlower');
+  // equivalent heading spellings still match
+  assert.equal(namedEndPose({ ...path, endH: 270 }, DEFAULT_SETTINGS).name, 'xFlower');
+});
+
+test('only poses are magnetic, and only within reach', () => {
+  assert.equal(nearestPoint(DEFAULT_SETTINGS, 96.8, 8.5, 2.5).name, 'xFlower');
+  assert.equal(nearestPoint(DEFAULT_SETTINGS, 100, 12, 2.5), null);
+  assert.equal(nearestPoint(DEFAULT_SETTINGS, 84, 66, 2.5), null, 'aim targets are not places to drive to');
+});
+
+test('settings saved before named poses existed gain the team poses once', () => {
+  const old = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+  old.version = 1;
+  old.points = [{ name: 'Blue audience cell', x: 84, y: 66 }, { name: 'My spot', x: 10, y: 10 }];
+  const migrated = normalizeSettings(old);
+  assert.deepEqual(migrated.points.map((p) => p.name), ['Blue audience cell', 'My spot', 'xFlower', 'yFlower', 'park']);
+  assert.equal(migrated.version, 2);
+  // someone who deleted a pose on purpose does not get it back
+  const current = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+  current.points = current.points.filter((p) => p.name !== 'park');
+  assert.ok(!normalizeSettings(current).points.some((p) => p.name === 'park'));
+});
+
+test('activeAt reports the step and the commands running at a time', () => {
+  const up = PRESETS.find((p) => p.id === 'up').make();
+  const sim = run(up);
+  let a = sim.activeAt(1);
+  assert.equal(a.phase, 'routine');
+  assert.equal(a.item.stepId, 'u1');
+  assert.deepEqual(a.spans.map((s) => s.name), ['Shoot']);
+  a = sim.activeAt(sim.items[1].t0 + 0.5);
+  assert.equal(a.item.stepId, 'u2');
+  assert.deepEqual(a.spans.map((s) => s.name), ['Intake + transfer']);
+  assert.equal(sim.activeAt(sim.routineTotal + 0.5).phase, 'park');
+  assert.equal(sim.activeAt(sim.end + 1).phase, 'done');
 });

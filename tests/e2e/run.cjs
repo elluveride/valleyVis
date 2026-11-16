@@ -694,6 +694,154 @@ tests.zoneReadout = async (browser, url) => {
   await page.context().close();
 };
 
+tests.namedPoses = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  await page.click('[data-step="u3"] .hd');
+  // drag the path end near xFlower (96, L/2): it snaps onto the pose and takes its heading
+  let end = (await t.handle((h) => h.kind === 'segEnd' && h.stepId === 'u3'))[0];
+  await t.drag({ x: end.cx, y: end.cy }, await t.at(97.2, 9.1));
+  let st = (await t.project()).steps[2];
+  check('poses: dragging a path end near a named pose snaps to it', st.segments[0].end.x === 96 && st.segments[0].end.y === 'L/2' && st.endH === -90 && st.endRef === 'xFlower', JSON.stringify([st.segments[0].end, st.endH, st.endRef]));
+  check('poses: the picker shows the tie', (await page.locator('[data-key="u3.pose"]').inputValue()) === 'xFlower');
+  await page.click('#btnExport');
+  let code = await page.locator('#exportOverlay pre.code').textContent();
+  check('poses: export uses the pose Java and imports its class', /Pose readyToShoot = AutoPaths\.xFlower\(f\);/.test(code) && /import org\.firstinspires\.ftc\.team2844simple\.autos\.AutoPaths;/.test(code), code.match(/Pose readyToShoot.*/)?.[0]);
+  await page.keyboard.press('Escape');
+  // Shift-drag ignores the magnet
+  end = (await t.handle((h) => h.kind === 'segEnd' && h.stepId === 'u3'))[0];
+  await t.drag({ x: end.cx, y: end.cy }, await t.at(97.2, 9.1), { shift: true });
+  st = (await t.project()).steps[2];
+  check('poses: Shift-drag does not snap', typeof st.segments[0].end.y === 'number' && !st.endRef, JSON.stringify([st.segments[0].end, st.endRef]));
+  // choose a pose from the picker
+  await page.selectOption('[data-key="u3.pose"]', 'yFlower');
+  await t.settle();
+  st = (await t.project()).steps[2];
+  check('poses: picking a pose moves the end onto it', st.segments[0].end.x === '144-L/2' && st.segments[0].end.y === 96 && st.endH === 0 && st.endRef === 'yFlower', JSON.stringify([st.segments[0].end, st.endH]));
+  // changing the heading breaks the tie, and export goes back to numbers
+  await page.locator('[data-key="u3.h"]').fill('45');
+  await page.locator('[data-key="u3.h"]').press('Tab');
+  await page.waitForTimeout(80);
+  check('poses: editing the heading unties the pose', (await page.locator('[data-key="u3.pose"]').inputValue()) === '');
+  await page.click('#btnExport');
+  code = await page.locator('#exportOverlay pre.code').textContent();
+  check('poses: an untied end exports as coordinates', /Pose readyToShoot = f\.of\(144\.0 - Constants\.ROBOT_LENGTH \/ 2\.0, 96\.0, 45\.0\);/.test(code), code.match(/Pose readyToShoot.*/)?.[0]);
+  await page.keyboard.press('Escape');
+  // the same drag while previewing red lands on the mirrored pose
+  await page.click('#allianceToggle button[data-alliance="red"]');
+  await t.settle();
+  end = (await t.handle((h) => h.kind === 'segEnd' && h.stepId === 'u3'))[0];
+  await t.drag({ x: end.cx, y: end.cy }, await t.atReal(144 - 96.5, 144 - 8.5));
+  st = (await t.project()).steps[2];
+  check('poses: snapping works in the red preview too', st.endRef === 'xFlower' && st.segments[0].end.y === 'L/2', JSON.stringify([st.segments[0].end, st.endRef]));
+  check('poses: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.nowReadout = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  const read = async (time) => {
+    await t.ev((tt) => window.valleyVis.seek(tt), time);
+    await t.ev(() => new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res))));
+    return page.locator('#nowReadout').innerText();
+  };
+  check('now: shows the step and its command', /Step 1/.test(await read(1)) && /Shoot/.test(await read(1)), await read(1));
+  const during = await read(5);
+  check('now: shows what runs during a path', /Step 2 · toGarden/.test(during) && /Intake \+ transfer/.test(during), during);
+  const sim = await t.ev(() => ({ total: window.valleyVis.store.derived().sim.routineTotal, end: window.valleyVis.store.derived().sim.end }));
+  check('now: shows the park route after the routine', /park/i.test(await read(sim.total + 0.5)), await read(sim.total + 0.5));
+  check('now: says when auto is over', /finished/i.test(await read(sim.end)), await read(sim.end));
+  check('now: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.twoTabs = async (browser, url) => {
+  const ctx = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+  const open = async () => {
+    const page = await ctx.newPage();
+    page.errors = [];
+    page.on('pageerror', (e) => page.errors.push(e.message));
+    await page.goto(url);
+    await page.waitForFunction(() => !!window.valleyVis);
+    return page;
+  };
+  const a = await open();
+  await a.waitForTimeout(500); // let the first tab save the starter routine
+  const b = await open();
+  const A = helpers(a);
+  const B = helpers(b);
+  const names = (t) => t.ev(() => window.valleyVis.store.routines().map((r) => r.name + (r.current ? '*' : '')));
+  check('tabs: both tabs start on the same single routine', (await names(A)).length === 1 && (await names(B)).length === 1, JSON.stringify([await names(A), await names(B)]));
+  // a routine added in one tab shows up in the other, which stays where it was
+  await A.example('solo');
+  await b.waitForTimeout(700);
+  check('tabs: a routine added in tab A appears in tab B', (await names(B)).some((n) => /^Solo/.test(n)) && (await names(B)).some((n) => /^Up.*\*$/.test(n)), JSON.stringify(await names(B)));
+  // tab B edits Up while tab A is on Solo: A picks up the edit and keeps its own
+  await B.ev(() => window.valleyVis.store.update((p) => { p.steps[4].seconds = 7; }));
+  await A.ev(() => window.valleyVis.store.update((p) => { p.steps[0].cmds[0].params.timeoutMs = 1234; }));
+  await a.waitForTimeout(900);
+  const upInA = await A.ev(() => { const s = window.valleyVis.store; const up = s.routines().find((r) => /^Up/.test(r.name)); s.switchRoutine(up.id); return s.state.project.steps[4].seconds; });
+  check('tabs: an edit made in tab B reaches tab A', upInA === 7, String(upInA));
+  await b.waitForTimeout(700);
+  const soloInB = await B.ev(() => { const s = window.valleyVis.store; const solo = s.routines().find((r) => /^Solo/.test(r.name)); s.switchRoutine(solo.id); return s.state.project.steps[0].cmds[0].params.timeoutMs; });
+  check('tabs: neither tab erased the other tab\'s edit', soloInB === 1234, String(soloInB));
+  // both tabs looking at the same routine: an edit in one redraws the other
+  await B.ev(() => { const s = window.valleyVis.store; s.switchRoutine(s.routines().find((r) => /^Up/.test(r.name)).id); });
+  await B.ev(() => window.valleyVis.store.update((p) => { p.steps[4].seconds = 9; }));
+  await a.waitForTimeout(900);
+  check('tabs: the routine on screen updates when another tab edits it', (await A.project()).steps[4].seconds === 9, String((await A.project()).steps[4].seconds));
+  check('tabs: the sidebar redraws with it', /Wait 9 s/.test(await a.locator('#tabBody').innerText()));
+  // delete in one tab removes it in the other
+  await A.ev(() => { const s = window.valleyVis.store; s.deleteRoutine(s.routines().find((r) => /^Solo/.test(r.name)).id); });
+  await b.waitForTimeout(900);
+  check('tabs: a routine deleted in tab A disappears from tab B', !(await names(B)).some((n) => /^Solo/.test(n)), JSON.stringify(await names(B)));
+  // settings travel too
+  await A.ev(() => window.valleyVis.store.updateSettings((s) => { s.robot.length = 16.5; }));
+  await b.waitForTimeout(900);
+  check('tabs: a settings change reaches the other tab', (await B.settings()).robot.length === 16.5);
+  // after a reload everything agrees
+  await a.waitForTimeout(400);
+  await a.reload();
+  await a.waitForFunction(() => !!window.valleyVis);
+  check('tabs: reload shows the merged result', (await names(A)).length === 1 && (await A.project()).steps[4].seconds === 9, JSON.stringify(await names(A)));
+  check('tabs: no page errors', a.errors.length === 0 && b.errors.length === 0, [...a.errors, ...b.errors].join(' | '));
+  await ctx.close();
+};
+
+tests.offline = async (browser) => {
+  // its own server, so it can be switched off mid-test
+  const own = await startServer(ROOT);
+  const ctx = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(own.url);
+  await page.waitForFunction(() => !!window.valleyVis);
+  const t = helpers(page);
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.waitForFunction(async () => (await (await caches.open('valleyvis-v1')).keys()).length >= 30, null, { timeout: 15000 });
+  await t.example('solo');
+  await page.waitForTimeout(500);
+  // pull the plug
+  own.server.closeAllConnections();
+  await new Promise((res) => own.server.close(res));
+  await page.reload();
+  let loaded = true;
+  await page.waitForFunction(() => !!window.valleyVis, null, { timeout: 15000 }).catch(() => { loaded = false; });
+  check('offline: the app loads with the server gone', loaded);
+  if (loaded) {
+    check('offline: your routines are still there', (await t.ev(() => window.valleyVis.store.routines().length)) === 2);
+    check('offline: the field image is served from the cache', await t.ev(() => new Promise((res) => { const i = new Image(); i.onload = () => res(i.naturalWidth > 0); i.onerror = () => res(false); i.src = 'assets/field-biobuzz.webp'; })));
+    await page.click('button:text-is("+ Path")');
+    await page.click('#btnExport');
+    const code = await page.locator('#exportOverlay pre.code').textContent();
+    check('offline: editing and exporting still work', /PedroAutoDsl\.auto/.test(code));
+  }
+  check('offline: no page errors', errors.length === 0, errors.join(' | '));
+  await ctx.close();
+};
+
 tests.keyboardTimeline = async (browser, url) => {
   const page = await newPage(browser, url);
   const t = helpers(page);

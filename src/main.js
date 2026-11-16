@@ -15,7 +15,7 @@ import { createHelp } from './ui/help.js';
 import { closeMenu, menuIsOpen, openMenu } from './ui/menu.js';
 import { preserveFocus } from './ui/fields.js';
 import { problemCounts, renderProblemsTab } from './ui/problems.js';
-import { renderRoutineTab } from './ui/routine.js';
+import { renderRoutineTab, stepTitle } from './ui/routine.js';
 import { createSettingsPage } from './ui/settings.js';
 import { createTimeline } from './ui/timeline.js';
 import { renderZonesTab, toolHint } from './ui/zones.js';
@@ -27,6 +27,7 @@ const store = createStore();
 if (store.fresh) store.replaceProject(PRESETS[0].make(), { history: false });
 store.onStorageError = () => toast('Could not save to this browser (storage is full or blocked). Use Routines → Save as a file.');
 window.addEventListener('pagehide', () => store.flush());
+window.addEventListener('storage', (e) => { if (e.key) store.adoptExternal(e.key); }); // another tab saved
 
 const canvas = $('field');
 const ctx = canvas.getContext('2d');
@@ -58,6 +59,29 @@ function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   lastRender = render(ctx, view, store, imageCache, { draft: interactions?.getDraft() });
   timeline.tick();
+  updateNow();
+}
+
+/** Bottom-right readout: the step the playhead is on and the commands running right then. */
+let nowSignature = '';
+function updateNow() {
+  const el = $('nowReadout');
+  const { sim } = store.derived();
+  const active = sim.activeAt(store.playback.time);
+  let what = '';
+  if (active.phase === 'park') what = 'AutoBase park route';
+  else if (active.phase === 'done') what = sim.items.length ? 'Auto finished' : '';
+  else {
+    const step = store.state.project.steps.find((st) => st.id === active.item.stepId);
+    what = step ? `Step ${active.item.index + 1} · ${stepTitle(step)}` : '';
+  }
+  const signature = `${what}|${active.spans.map((sp) => sp.name + sp.color).join(',')}`;
+  if (signature === nowSignature) return;
+  nowSignature = signature;
+  el.replaceChildren(
+    ...(what ? [h('span.what', { text: what })] : []),
+    ...active.spans.map((sp) => h('span.state', { text: sp.name, style: { background: sp.color } })),
+  );
 }
 
 function requestRender() {
@@ -295,7 +319,7 @@ function syncHeader() {
 }
 
 store.subscribe((kind, opts = {}) => {
-  if (kind === 'history') {
+  if (kind === 'history' || kind === 'library') {
     syncHeader();
     return;
   }
@@ -333,5 +357,10 @@ syncHeader();
 resize();
 
 importFromHash();
+
+// offline support: after one visit the app loads without a connection
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
 
 window.valleyVis = app; // handy for debugging from the console

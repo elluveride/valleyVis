@@ -3,6 +3,7 @@
 
 import { closestCompletion, displayDeg } from './geometry.js';
 import { evalValue } from './expr.js';
+import { nearestPoint } from './poses.js';
 import { symbolTable } from './resolve.js';
 import { findStep } from './store.js';
 import { roundTo, uid } from './util.js';
@@ -95,12 +96,28 @@ export function attachInteractions(canvas, app) {
       store.update((pr) => { pr.start.h = deg; }, { history: false });
     } else if (h.kind === 'segEnd' || h.kind === 'control') {
       const d = toDesign(real, e);
+      // path ends are magnetic to named points (Shift turns it off)
+      const raw = frame().point(real.x, real.y);
+      const magnet = h.kind === 'segEnd' && !e.shiftKey ? nearestPoint(settings(), raw.x, raw.y, 2.5) : null;
       store.update((pr) => {
         const s = findStep(pr, h.stepId);
         const seg = s?.segments[h.seg];
         if (!seg) return;
-        if (h.kind === 'segEnd') seg.end = { x: d.x, y: d.y };
-        else seg.controls[h.ctrl] = { x: d.x, y: d.y };
+        if (h.kind === 'control') {
+          seg.controls[h.ctrl] = { x: d.x, y: d.y };
+          return;
+        }
+        const isLast = h.seg === s.segments.length - 1;
+        if (magnet) {
+          seg.end = { x: magnet.x, y: magnet.y }; // keeps expressions such as 144-L/2
+          if (isLast && magnet.ph !== null) {
+            s.endH = magnet.h;
+            s.endRef = magnet.name;
+          }
+        } else {
+          seg.end = { x: d.x, y: d.y };
+          if (isLast) delete s.endRef;
+        }
       }, { history: false });
     } else if (h.kind === 'pathStart') {
       const d = toDesign(real, e);

@@ -1,7 +1,7 @@
 // Makes anything loaded from outside (browser storage, opened files, share links) safe to use:
 // wrong types are replaced with defaults, broken entries are dropped, ids are made unique.
 
-import { cloneDeep, DEFAULT_SETTINGS, defaultZones } from './defaults.js';
+import { cloneDeep, DEFAULT_POINTS, DEFAULT_SETTINGS, defaultZones } from './defaults.js';
 
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -94,7 +94,7 @@ function step(s) {
       if (!segments.length) segments.push({ type: 'line', controls: [], end: { x: 72, y: 72 } });
       return {
         id, type: 'path', name: str(s.name, 'path'), endName: str(s.endName, ''),
-        segments, endH: val(s.endH, 0), heading: heading(s.heading),
+        segments, endH: val(s.endH, 0), ...(typeof s.endRef === 'string' && s.endRef ? { endRef: s.endRef } : {}), heading: heading(s.heading),
         maxSpeed: optVal(s.maxSpeed), timeout: optVal(s.timeout),
         during: (Array.isArray(s.during) ? s.during : []).map(cmdRef).filter(Boolean),
         markers: (Array.isArray(s.markers) ? s.markers : []).map(marker).filter(Boolean),
@@ -194,7 +194,14 @@ export function normalizeSettings(raw) {
   const s = conform(raw, DEFAULT_SETTINGS);
   s.version = DEFAULT_SETTINGS.version;
   s.constants = s.constants.filter((c) => isObj(c) && typeof c.name === 'string').map((c) => ({ name: c.name, value: isNum(Number(c.value)) ? Number(c.value) : 0, java: str(c.java) }));
-  s.points = s.points.filter(isObj).map((p) => ({ name: str(p.name, 'Point'), x: val(p.x, 72), y: val(p.y, 72) }));
+  s.points = s.points.filter(isObj).map((p) => ({ name: str(p.name, 'Point'), x: val(p.x, 72), y: val(p.y, 72), h: optVal(p.h), java: str(p.java) }));
+  // settings saved before version 2 get the team's shared poses added once
+  const savedVersion = isObj(raw) && isNum(raw.version) ? raw.version : null;
+  if (savedVersion !== null && savedVersion < 2) {
+    for (const d of DEFAULT_POINTS) {
+      if (d.h !== null && !s.points.some((p) => p.name === d.name)) s.points.push({ ...d });
+    }
+  }
   s.commands = uniqueIds(s.commands.map(command).filter(Boolean), 'cmd');
   s.robot.length = Math.max(0.5, s.robot.length);
   s.robot.width = Math.max(0.5, s.robot.width);

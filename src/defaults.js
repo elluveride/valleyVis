@@ -1,7 +1,7 @@
 // Defaults seeded from Team2844_Season2026/team2844simple (Constants.java, PedroConstants.java,
 // commands/, AutoBase.java). Everything here is editable on the Settings page.
 
-export const SETTINGS_VERSION = 1;
+export const SETTINGS_VERSION = 2; // 2: named points can carry a heading and Java
 
 const TEAM = 'org.firstinspires.ftc.team2844simple';
 
@@ -76,6 +76,18 @@ export const DEFAULT_COMMANDS = [
   },
 ];
 
+/**
+ * Blue-frame points drawn on the field. A point with a heading is a pose that paths can end on;
+ * if it also has Java, the export writes that expression instead of raw coordinates.
+ */
+export const DEFAULT_POINTS = [
+  { name: 'Blue audience cell', x: 84, y: 66, h: null, java: '' }, // Constants.BLUE_AUDIENCE_X/Y
+  { name: 'Blue back cell', x: 84, y: 78, h: null, java: '' },
+  { name: 'xFlower', x: 96, y: 'L/2', h: -90, java: 'AutoPaths.xFlower(f)' },
+  { name: 'yFlower', x: '144-L/2', y: 96, h: 0, java: 'AutoPaths.yFlower(f)' },
+  { name: 'park', x: '144-L/2', y: 24, h: 180, java: 'AutoPaths.park(f)' },
+];
+
 export const DEFAULT_SETTINGS = {
   version: SETTINGS_VERSION,
   robot: {
@@ -118,11 +130,7 @@ export const DEFAULT_SETTINGS = {
   constants: [
     // extra named numbers usable in any coordinate field, e.g. { name: 'MID_X', value: 82, java: 'MID_X' }
   ],
-  points: [
-    // design-frame (blue) points drawn on the field and usable as facing targets
-    { name: 'Blue audience cell', x: 84, y: 66 },
-    { name: 'Blue back cell', x: 84, y: 78 },
-  ],
+  points: DEFAULT_POINTS,
   code: {
     routinePackage: `${TEAM}.autos.routines`,
     bluePackage: `${TEAM}.autos.blue`,
@@ -134,6 +142,7 @@ export const DEFAULT_SETTINGS = {
     poseFactory: 'field()',
     turnTemplate: 'new TurnToCmd({drive}, {heading})',
     turnImports: `${TEAM}.commands.drive.TurnToCmd`,
+    extraImports: `${TEAM}.autos.AutoPaths`, // one per line; only added when the class is actually used
     blueAlliance: 'Constants.BLUE_ALLIANCE',
     redAlliance: 'Constants.RED_ALLIANCE',
   },

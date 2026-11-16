@@ -255,7 +255,11 @@ export function resolveProject(project, settings, alliance = 'blue') {
     steps.push(r);
   });
   const zones = (project.zones || []).map((z) => resolveZone(z, frame, ev, alliance === 'red'));
-  const points = (settings.points || []).map((p) => ({ name: p.name, ...frame.point(ev(p.x, `Point ${p.name} x`, null), ev(p.y, `Point ${p.name} y`, null)) }));
+  const points = (settings.points || []).map((p) => ({
+    name: p.name,
+    ...frame.point(ev(p.x, `Point ${p.name} x`, null), ev(p.y, `Point ${p.name} y`, null)),
+    h: p.h === null || p.h === undefined || p.h === '' ? null : frame.heading(deg2rad(ev(p.h, `Point ${p.name} heading`, null))),
+  }));
   for (const st of steps) issues.push(...st.issues);
   return { alliance, frame, start, steps, zones, points, issues };
 }

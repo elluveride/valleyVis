@@ -413,6 +413,7 @@ function drawPoints(ctx, view, points, labels) {
     ctx.moveTo(s.x, s.y - 6); ctx.lineTo(s.x, s.y + 6);
     ctx.stroke();
     ctx.restore();
+    if (p.h !== null && p.h !== undefined) arrow(ctx, s, view.headingVec(p.h), 14, '#e879f9');
     if (labels) drawLabel(ctx, s, p.name, '#f5d0fe', i % 2 ? 22 : 0);
   });
 }

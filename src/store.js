@@ -35,13 +35,15 @@ function loadLibrary(storage) {
     }
   }
   let fresh = false;
+  let unsaved = false; // built here rather than read from the library key: needs a first save
   if (!routines.length) {
     const legacy = storage.get(LEGACY_PROJECT_KEY);
     fresh = !legacy;
+    unsaved = true;
     routines.push({ id: routineId(), project: legacy ? normalizeProject(legacy) : emptyProject() });
   }
   const currentId = routines.some((r) => r.id === raw?.currentId) ? raw.currentId : routines[0].id;
-  return { routines, currentId, fresh };
+  return { routines, currentId, fresh, unsaved };
 }
 
 export function createStore() {
@@ -85,14 +87,64 @@ export function createStore() {
     }
   }
   const entry = () => library.routines.find((r) => r.id === library.currentId);
-  const persistProject = debounce(() => save(LIBRARY_KEY, { currentId: library.currentId, routines: library.routines }), 300);
-  const persistSettings = debounce(() => save(SETTINGS_KEY, state.settings), 300);
+
+  // Other tabs share the same storage. Each tab remembers which routines it changed ("dirty")
+  // or deleted, and merges with what is on disk before writing, so tabs never erase each other.
+  const dirty = new Set(library.unsaved ? [library.currentId] : []);
+  const removed = new Set();
+  const markDirty = () => dirty.add(library.currentId);
+
+  /** Fold in what other tabs saved. Returns true if the routine on screen was replaced. */
+  function mergeWithDisk() {
+    const raw = storage.get(LIBRARY_KEY);
+    if (!raw || typeof raw !== 'object' || !Array.isArray(raw.routines)) return false;
+    const disk = new Map();
+    for (const r of raw.routines) if (r && typeof r.id === 'string' && r.project) disk.set(r.id, r.project);
+    const before = entry().project;
+    const merged = [];
+    const mine = new Set();
+    for (const r of library.routines) {
+      mine.add(r.id);
+      if (dirty.has(r.id)) merged.push(r); // changed here: ours wins
+      else if (disk.has(r.id)) merged.push({ id: r.id, project: normalizeProject(disk.get(r.id)) }); // maybe changed elsewhere
+      else if (r.id === library.currentId) { dirty.add(r.id); merged.push(r); } // deleted elsewhere while open here: keep it
+      // otherwise it was deleted in another tab
+    }
+    for (const [id, project] of disk) {
+      if (!mine.has(id) && !removed.has(id)) merged.push({ id, project: normalizeProject(project) }); // created elsewhere
+    }
+    library.routines.splice(0, library.routines.length, ...merged);
+    const current = entry().project;
+    const changed = JSON.stringify(current) !== JSON.stringify(before);
+    // keep the same object when nothing changed, so in-flight edits stay attached
+    if (!changed) entry().project = before;
+    state.project = entry().project;
+    return changed;
+  }
+
+  function writeLibrary() {
+    mergeWithDisk();
+    save(LIBRARY_KEY, { currentId: library.currentId, routines: library.routines });
+    dirty.clear();
+    removed.clear();
+  }
+  const persistProject = debounce(writeLibrary, 300);
+  let settingsDirty = false;
+  const writeSettings = debounce(() => {
+    save(SETTINGS_KEY, state.settings);
+    settingsDirty = false;
+  }, 300);
+  const persistSettings = () => {
+    settingsDirty = true;
+    writeSettings();
+  };
   const persistUi = debounce(() => save(UI_KEY, { alliance: state.ui.alliance, tab: state.ui.tab, view: state.ui.view }), 300);
 
   /** Point the current library entry at a new project object and make it the live one. */
   function setProject(project) {
     entry().project = project;
     state.project = project;
+    markDirty();
     rev += 1;
   }
 
@@ -152,6 +204,7 @@ export function createStore() {
       const history = opts.history !== false && pending === null;
       const before = history ? snapshot() : null;
       fn(state.project);
+      markDirty();
       rev += 1;
       if (history) pushUndo(before);
       persistProject();
@@ -180,6 +233,7 @@ export function createStore() {
       normalized.name = uniqueName(normalized.name);
       const id = routineId();
       library.routines.push({ id, project: normalized });
+      dirty.add(id);
       if (opts.select !== false) store.switchRoutine(id);
       else persistProject();
       return id;
@@ -207,7 +261,13 @@ export function createStore() {
       store.commit();
       library.routines.splice(idx, 1);
       histories.delete(id);
-      if (!library.routines.length) library.routines.push({ id: routineId(), project: emptyProject() });
+      dirty.delete(id);
+      removed.add(id);
+      if (!library.routines.length) {
+        const fresh = { id: routineId(), project: emptyProject() };
+        library.routines.push(fresh);
+        dirty.add(fresh.id);
+      }
       if (library.currentId === id) store.switchRoutine(library.routines[Math.min(idx, library.routines.length - 1)].id);
       else persistProject();
     },
@@ -238,11 +298,34 @@ export function createStore() {
       persistUi();
       emit('ui', { ...opts, patch });
     },
+    /** Another tab saved something (a 'storage' event): fold it in. */
+    adoptExternal(key) {
+      if (key === LIBRARY_KEY) {
+        if (pending !== null) return; // mid-drag or mid-typing here: our next save merges anyway
+        const before = library.routines.length;
+        const replaced = mergeWithDisk();
+        if (replaced) {
+          rev += 1;
+          resetView();
+          histories.delete(library.currentId);
+          emit('project', { replaced: true, external: true });
+        } else if (library.routines.length !== before) {
+          emit('library', {});
+        }
+      } else if (key === SETTINGS_KEY && !settingsDirty) {
+        state.settings = normalizeSettings(storage.get(SETTINGS_KEY));
+        rev += 1;
+        emit('settings', { external: true });
+      }
+    },
     /** Write everything to storage now (called when the page is being hidden). */
     flush() {
       store.commit();
-      save(LIBRARY_KEY, { currentId: library.currentId, routines: library.routines });
-      save(SETTINGS_KEY, state.settings);
+      if (dirty.size || removed.size) writeLibrary();
+      if (settingsDirty) {
+        save(SETTINGS_KEY, state.settings);
+        settingsDirty = false;
+      }
     },
     canUndo: () => history().undo.length > 0,
     canRedo: () => history().redo.length > 0,

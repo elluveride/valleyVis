@@ -137,12 +137,14 @@ export function createSettingsPage(overlay, app) {
 
   function points(s) {
     return [
-      h('p.hint', { text: 'Blue-frame points drawn on the field and offered as "face a point" targets. Defaults are Constants.BLUE_AUDIENCE/BACK; red ones come from mirroring.' }),
+      h('p.hint', { text: 'Blue-frame spots drawn on the field. Any of them can be a "face a point" target. Give one a heading and it becomes a pose a path can end on: pick it in the path editor, or drag a path end near it and it snaps. Give it Java as well and the export writes that expression (for example AutoPaths.xFlower(f)) instead of raw numbers.' }),
       ...table(s.points, [
         { label: 'Name', input: (r, i) => textInput(app, `set.p${i}n`, r.name, set((st, v) => { st.points[i].name = v; })) },
         { label: 'x', input: (r, i) => exprInput(app, `set.p${i}x`, r.x, set((st, v) => { st.points[i].x = v; })) },
         { label: 'y', input: (r, i) => exprInput(app, `set.p${i}y`, r.y, set((st, v) => { st.points[i].y = v; })) },
-      ], () => { store.updateSettings((st) => { st.points.push({ name: `Point ${st.points.length + 1}`, x: 72, y: 72 }); }); rerender(); },
+        { label: 'Heading ° (optional)', input: (r, i) => exprInput(app, `set.p${i}h`, r.h ?? '', set((st, v) => { st.points[i].h = v === '' ? null : v; }), { allowEmpty: true }) },
+        { label: 'Java (optional)', input: (r, i) => textInput(app, `set.p${i}j`, r.java, set((st, v) => { st.points[i].java = v; }), { mono: true }) },
+      ], () => { store.updateSettings((st) => { st.points.push({ name: `Point ${st.points.length + 1}`, x: 72, y: 72, h: null, java: '' }); }); rerender(); },
       (i) => { store.updateSettings((st) => { st.points.splice(i, 1); }); rerender(); }),
     ];
   }
@@ -217,6 +219,7 @@ export function createSettingsPage(overlay, app) {
         t('ra', 'Red alliance()', 'redAlliance'),
         t('tt', 'Turn command ({drive}, {heading} radians)', 'turnTemplate'),
         t('ti', 'Turn command imports', 'turnImports'),
+        t('xi', 'Other classes your Java mentions (comma separated)', 'extraImports'),
       ]),
     ];
   }

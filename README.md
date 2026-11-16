@@ -38,6 +38,9 @@ Then open <http://localhost:8000>. Any static host works, because ES modules nee
 | Get code | Click **Export Java**. |
 | Keep several autos | **Routines ▾** lists every routine saved in this browser. Edits save as you go, and each routine has its own undo history. Examples and opened files are added to the list; nothing is overwritten. |
 | Send a routine to a teammate | **Share** copies a link that holds the routine (optionally with your robot settings). Nothing is uploaded: the link itself is the data. Or use *Routines → Save this routine as a file* and commit the `.vvis.json`. |
+| End a path on a shared spot | Pick a **Named pose** in the path editor, or drag the path end near one and it snaps. Poses with Java (like `AutoPaths.xFlower(f)`) export as that expression. Edit the list in *Settings → Named points*. |
+| See what the robot is doing | While playing or scrubbing, the bottom-right of the field shows the current step and the commands running at that moment. |
+| Use it at a competition | After one visit the site works **offline**, and browsers offer to install it as an app. |
 | See all shortcuts | Press **?**. |
 
 ### Exports
@@ -110,7 +113,10 @@ Code map (`src/`):
 - `codegen.js`: Java export
 - `lint.js`: subsystem conflicts, naming, heading hand-offs between paths
 - `share.js`: share-link encoding
+- `poses.js`: named poses (snapping, tying a path end to a pose)
 - `store.js`: routine library, undo/redo, settings, saving to the browser
 - `render.js` / `interact.js`: canvas
 - `ui/`: panels and dialogs
 - `presets.js`: the team's existing Up / Solo / Down routines, rebuilt for comparison
+
+`sw.js` (repo root) is the offline cache. It lists every app file; `tests/offline.test.js` fails if a new file is missing from the list.

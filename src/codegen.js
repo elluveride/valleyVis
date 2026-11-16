@@ -2,6 +2,7 @@
 // team2844simple/autos (PoseFactory f = field(); blue design frame, mirrored for red).
 
 import { fillTemplate, fmtNum, javaValue } from './expr.js';
+import { namedEndPose } from './poses.js';
 import { symbolTable } from './resolve.js';
 
 const JAVA_KEYWORDS = new Set('abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for goto if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while true false null var record yield'.split(' '));
@@ -211,7 +212,10 @@ function genPath(step, ctx, state) {
   const startVar = ensureStartVar(ctx, state, `${pathName}Start`);
   const last = segs[segs.length - 1];
   const endVar = ctx.name(step.endName || `${pathName}End`, 'pathEnd');
-  state.poses.push(`Pose ${endVar} = ${poseOf(ctx, last.end.x, last.end.y, step.endH ?? 0)};`);
+  const named = namedEndPose(step, ctx.settings);
+  state.poses.push(named && named.java && named.ph !== null
+    ? `Pose ${endVar} = ${named.java.trim().replace(/;$/, '')};`
+    : `Pose ${endVar} = ${poseOf(ctx, last.end.x, last.end.y, step.endH ?? 0)};`);
   let prev = startVar;
   const segExprs = segs.map((seg, i) => {
     let to = endVar;
@@ -335,6 +339,7 @@ function knownClasses(settings) {
     'com.vcs.valleylib.core.command.Command', 'com.vcs.valleylib.core.command.Commands', 'com.vcs.valleylib.ftc.pedro.PedroAutoDsl',
     settings.code.constantsImport,
     ...splitList(settings.code.turnImports),
+    ...splitList(settings.code.extraImports),
     ...(settings.commands || []).flatMap((c) => splitList(c.imports)),
   ];
   const out = {};

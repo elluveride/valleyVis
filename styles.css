@@ -107,6 +107,10 @@ input[type="color"] { padding: 0; width: 28px; height: 24px; }
 .field-overlay.top-right { top: 16px; right: 16px; display: flex; gap: 4px; }
 .field-overlay.bottom-left { bottom: 16px; left: 16px; color: var(--muted); background: rgba(11, 15, 23, 0.85); padding: 4px 8px; border-radius: 5px; max-width: 70%; }
 .field-overlay.bottom-left:empty { display: none; }
+.field-overlay.bottom-right { bottom: 16px; right: 16px; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; max-width: 60%; pointer-events: none; }
+.field-overlay.bottom-right:empty { display: none; }
+.now .what { background: rgba(11, 15, 23, 0.85); padding: 3px 8px; border-radius: 5px; color: var(--text); }
+.now .state { padding: 3px 8px; border-radius: 5px; color: #0b0f17; font-weight: 600; border: 1px solid rgba(0, 0, 0, 0.35); }
 .view-toggles button { font-size: 11px; padding: 2px 7px; background: rgba(17, 24, 39, 0.85); color: var(--muted); }
 .view-toggles button.on { color: var(--accent); border-color: var(--accent); }
 
@@ -246,6 +250,7 @@ dl.keys dd { margin: 0; color: var(--muted); }
   .field-area { height: min(100vw, 78vh); padding: 6px; }
   .field-overlay.top-right { top: 8px; right: 8px; }
   .field-overlay.top-left { top: 8px; left: 8px; }
+  .field-overlay.bottom-right { bottom: 8px; right: 8px; }
   .sidebar { border-left: 0; border-top: 1px solid var(--line); }
   .tab-body { overflow: visible; }
   .project-name { width: 140px; }
