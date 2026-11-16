@@ -1,4 +1,7 @@
-name: Test and deploy to GitHub Pages
+name: Test and publish to GitHub Pages
+
+# Pages is served from the gh-pages branch. Every push to main runs the tests
+# and, if they pass, copies that commit to gh-pages.
 
 on:
   push:
@@ -7,13 +10,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
+  contents: write
 
 jobs:
   test:
@@ -25,18 +22,12 @@ jobs:
           node-version: 22
       - run: npm test
 
-  deploy:
+  publish:
     if: github.event_name != 'pull_request'
     needs: test
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
         with:
-          path: .
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          fetch-depth: 0
+      - run: git push --force origin HEAD:gh-pages

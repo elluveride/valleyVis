@@ -22,7 +22,7 @@ python3 -m http.server 8000
 
 Then open <http://localhost:8000>. Any static host works, because ES modules need `http://`, not `file://`.
 
-**GitHub Pages:** in the repo, go to *Settings → Pages* and set *Source* to **GitHub Actions**. After that, every push to `main` runs the tests and deploys (`.github/workflows/pages.yml`).
+**Live site:** <https://elluveride.github.io/valleyVis/>. It is served from the `gh-pages` branch. Every push to `main` runs the tests and, if they pass, copies the commit to `gh-pages` (`.github/workflows/pages.yml`). You can also push a branch there directly with `git push origin HEAD:gh-pages`.
 
 ## Using it
 
