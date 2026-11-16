@@ -338,6 +338,7 @@ export function attachInteractions(canvas, app) {
   });
 
   window.addEventListener('keydown', (e) => {
+    if (app.blocked && app.blocked()) return; // a dialog or menu is open
     const tag = (e.target?.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable;
     const mod = e.ctrlKey || e.metaKey;
@@ -353,6 +354,8 @@ export function attachInteractions(canvas, app) {
     }
     if (typing || mod) return;
     if (e.key === ' ') {
+      // a button reached with the keyboard keeps its normal Space behaviour
+      if (tag === 'button' && e.target.matches(':focus-visible')) return;
       e.preventDefault();
       app.togglePlay();
     } else if (e.key === 'Escape') {

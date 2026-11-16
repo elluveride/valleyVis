@@ -70,8 +70,14 @@ const helpers = (page) => {
     await page.waitForTimeout(40);
   };
   const settle = () => page.waitForTimeout(60);
+  const menu = async (button, item) => {
+    await page.click(button);
+    await page.click(`.menu [data-menu="${item}"]`);
+    await page.waitForTimeout(60);
+  };
+  const example = (id) => menu('#btnRoutines', `example-${id}`);
   const issues = () => ev(() => window.valleyVis.store.derived().issues.map((i) => ({ level: i.level, msg: i.msg, stepId: i.stepId })));
-  return { ev, project, settings, ui, at, atReal, handle, drag, settle, issues };
+  return { ev, project, settings, ui, at, atReal, handle, drag, settle, issues, menu, example };
 };
 
 const tests = {};
@@ -313,37 +319,206 @@ tests.redFrame = async (browser, url) => {
 tests.saveOpen = async (browser, url) => {
   const page = await newPage(browser, url);
   const t = helpers(page);
-  await page.selectOption('#presetSelect', 'solo');
+  await t.example('solo');
   const before = await t.project();
-  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btnSave')]);
+  await page.click('#btnRoutines');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('.menu [data-menu="save-file"]')]);
   const file = path.join(os.tmpdir(), `vv-${Date.now()}.vvis.json`);
   await dl.saveAs(file);
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   check('save: file contains the project', saved.kind === 'valleyvis-project' && saved.project.steps.length === before.steps.length);
   check('save: filename is derived from the routine name', /Solo/.test(dl.suggestedFilename()) && dl.suggestedFilename().endsWith('.vvis.json'), dl.suggestedFilename());
-  page.once('dialog', (d) => d.accept());
-  await page.click('#btnNew');
-  check('save: New clears the routine', (await t.project()).steps.length === 0);
+  await t.menu('#btnRoutines', 'new');
+  check('save: New opens an empty routine', (await t.project()).steps.length === 0);
+  const countBefore = (await t.ev(() => window.valleyVis.store.routines())).length;
   await page.setInputFiles('#fileInput', file);
   await page.waitForTimeout(150);
-  check('open: round trip restores the routine', JSON.stringify(await t.project()) === JSON.stringify(before));
+  const opened = await t.project();
+  check('open: the file comes back as a new routine with the same contents', JSON.stringify({ ...opened, name: before.name }) === JSON.stringify(before) && (await t.ev(() => window.valleyVis.store.routines())).length === countBefore + 1, opened.name);
+  check('open: a duplicate name gets a number', opened.name === `${before.name} (2)`, opened.name);
   // bad files do not break anything
   const bad = path.join(os.tmpdir(), `vv-bad-${Date.now()}.json`);
-  fs.writeFileSync(bad, '{"hello": 1}');
-  await page.setInputFiles('#fileInput', bad);
-  await page.waitForTimeout(150);
-  check('open: an unrelated JSON file is rejected', JSON.stringify(await t.project()) === JSON.stringify(before));
-  fs.writeFileSync(bad, 'not json at all');
-  await page.setInputFiles('#fileInput', bad);
-  await page.waitForTimeout(150);
-  check('open: a non-JSON file is rejected', JSON.stringify(await t.project()) === JSON.stringify(before));
+  for (const [label, content] of [['an unrelated JSON file', '{"hello": 1}'], ['a non-JSON file', 'not json at all'], ['a JSON null', 'null'], ['a JSON array', '[1,2,3]']]) {
+    fs.writeFileSync(bad, content);
+    await page.setInputFiles('#fileInput', bad);
+    await page.waitForTimeout(120);
+    check(`open: ${label} is rejected`, JSON.stringify(await t.project()) === JSON.stringify(opened) && (await t.ev(() => window.valleyVis.store.routines())).length === countBefore + 1);
+  }
   // persistence across reloads
+  await page.waitForTimeout(400);
   await page.reload();
   await page.waitForFunction(() => !!window.valleyVis);
-  check('persist: reload keeps the routine', JSON.stringify(await t.project()) === JSON.stringify(before));
+  check('persist: reload keeps the routine', JSON.stringify(await t.project()) === JSON.stringify(opened));
   check('save: no page errors', page.errors.length === 0, page.errors.join(' | '));
   fs.rmSync(file, { force: true });
   fs.rmSync(bad, { force: true });
+  await page.context().close();
+};
+
+tests.library = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  const list = () => t.ev(() => window.valleyVis.store.routines());
+  check('library: starts with the example routine', (await list()).length === 1 && /Up/.test((await list())[0].name));
+  await t.example('solo');
+  await t.example('down');
+  let l = await list();
+  check('library: examples are added, not swapped in', l.length === 3 && /Down/.test(l.find((r) => r.current).name), JSON.stringify(l.map((r) => r.name)));
+  // edit Down, switch to Up, edit, switch back: both edits kept, undo is per routine
+  await t.ev(() => window.valleyVis.store.update((p) => { p.steps[1].seconds = 3; }));
+  await t.menu('#btnRoutines', `routine-${l[0].id}`);
+  check('library: switching shows the other routine', /Up/.test((await t.project()).name) && (await t.project()).steps.length === 6);
+  check('library: a routine you have not edited has nothing to undo', await t.ev(() => !window.valleyVis.store.canUndo()));
+  await page.click('[data-step="u5"] .hd');
+  await page.locator('[data-key="u5.sec"]').fill('2');
+  await page.locator('[data-key="u5.sec"]').press('Tab');
+  await t.menu('#btnRoutines', `routine-${l[2].id}`);
+  check('library: edits to the first routine were kept on switch', (await t.project()).steps[1].seconds === 3);
+  await page.locator('#field').focus();
+  await page.keyboard.press('Control+z');
+  check('library: undo applies to the routine on screen only', (await t.project()).steps[1].seconds === 15, String((await t.project()).steps[1].seconds));
+  await t.menu('#btnRoutines', `routine-${l[0].id}`);
+  check('library: the other routine still has its edit', (await t.project()).steps[4].seconds === 2);
+  // rename through the header shows up in the menu
+  await page.locator('#projectName').fill('Renamed Up');
+  await page.locator('#projectName').press('Tab');
+  check('library: renaming updates the list', (await list()).some((r) => r.name === 'Renamed Up'));
+  // duplicate + delete
+  await t.menu('#btnRoutines', `dup-${l[0].id}`);
+  l = await list();
+  check('library: duplicate makes a copy and opens it', l.length === 4 && l.find((r) => r.current).name === 'Renamed Up copy', JSON.stringify(l.map((r) => r.name)));
+  page.once('dialog', (d) => d.accept());
+  await t.menu('#btnRoutines', `del-${l.find((r) => r.current).id}`);
+  l = await list();
+  check('library: delete removes it and opens a neighbour', l.length === 3 && !l.some((r) => r.name === 'Renamed Up copy') && l.some((r) => r.current));
+  page.once('dialog', (d) => d.dismiss());
+  await t.menu('#btnRoutines', `del-${l[0].id}`);
+  check('library: cancelling the delete keeps the routine', (await list()).length === 3);
+  // everything survives a reload, including which routine is open
+  const current = (await list()).find((r) => r.current).name;
+  await page.waitForTimeout(400);
+  await page.reload();
+  await page.waitForFunction(() => !!window.valleyVis);
+  l = await list();
+  check('library: reload keeps all routines and the open one', l.length === 3 && l.find((r) => r.current).name === current, JSON.stringify(l));
+  // deleting the last routine leaves an empty one
+  for (let i = 0; i < 3; i++) {
+    page.once('dialog', (d) => d.accept());
+    const cur = (await list()).find((r) => r.current);
+    await t.menu('#btnRoutines', `del-${cur.id}`);
+  }
+  l = await list();
+  check('library: deleting everything leaves one empty routine', l.length === 1 && l[0].steps === 0, JSON.stringify(l));
+  // menu closes on Escape and on an outside click
+  await page.click('#btnRoutines');
+  await page.keyboard.press('Escape');
+  check('library: Escape closes the menu', (await page.locator('.menu').count()) === 0);
+  await page.click('#btnRoutines');
+  await page.mouse.click(700, 500);
+  check('library: clicking elsewhere closes the menu', (await page.locator('.menu').count()) === 0);
+  check('library: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.legacyMigration = async (browser, url) => {
+  const legacy = { name: 'Old single routine', start: { x: 30, y: 30, h: 0 }, steps: [{ id: 'w', type: 'wait', seconds: 2 }], zones: [] };
+  const ctx = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+  await ctx.addInitScript(`if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1'); localStorage.setItem('valleyvis.project.v1', ${JSON.stringify(JSON.stringify(legacy))}); }`);
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(url);
+  await page.waitForFunction(() => !!window.valleyVis);
+  const t = helpers(page);
+  const l = await t.ev(() => window.valleyVis.store.routines());
+  check('migration: a routine saved by the old version becomes the first library entry', l.length === 1 && l[0].name === 'Old single routine' && (await t.project()).steps[0].seconds === 2, JSON.stringify(l));
+  check('migration: no page errors', errors.length === 0, errors.join(' | '));
+  await ctx.close();
+};
+
+tests.shareLinks = async (browser, url) => {
+  const page = await newPage(browser, url, { context: { permissions: ['clipboard-read', 'clipboard-write'] } });
+  const t = helpers(page);
+  await t.example('solo');
+  await t.ev(() => window.valleyVis.store.updateSettings((s) => { s.robot.length = 17; }));
+  const original = await t.project();
+  await t.menu('#btnShare', 'share-routine');
+  await page.waitForTimeout(150);
+  const link = await page.evaluate(() => navigator.clipboard.readText());
+  check('share: link is copied and reasonably short', link.startsWith(url) && link.includes('#r=') && link.length < 2500, `${link.length} chars`);
+  // open it in a completely fresh browser profile
+  const other = await newPage(browser, link);
+  const o = helpers(other);
+  await other.waitForTimeout(300);
+  const got = await o.project();
+  check('share: the link opens the same routine in a fresh browser', JSON.stringify(got) === JSON.stringify(original), got.name);
+  check('share: the receiver keeps their own example too', (await o.ev(() => window.valleyVis.store.routines())).length === 2);
+  check('share: the hash is cleared so a reload does not import twice', (await other.evaluate(() => location.hash)) === '');
+  check('share: receiver settings are untouched by a routine-only link', (await o.settings()).robot.length === 15.875);
+  await other.reload();
+  await other.waitForFunction(() => !!window.valleyVis);
+  check('share: reload does not add another copy', (await o.ev(() => window.valleyVis.store.routines())).length === 2);
+  check('share: no page errors on the receiving side', other.errors.length === 0, other.errors.join(' | '));
+  await other.context().close();
+  // link with settings: receiver is asked first
+  await t.menu('#btnShare', 'share-all');
+  await page.waitForTimeout(150);
+  const link2 = await page.evaluate(() => navigator.clipboard.readText());
+  const ctxYes = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+  const yes = await ctxYes.newPage();
+  yes.on('dialog', (d) => d.accept());
+  await yes.goto(link2);
+  await yes.waitForFunction(() => !!window.valleyVis);
+  await yes.waitForTimeout(400);
+  check('share: accepting takes the sender settings', (await yes.evaluate(() => window.valleyVis.store.state.settings.robot.length)) === 17);
+  await ctxYes.close();
+  const ctxNo = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+  const no = await ctxNo.newPage();
+  no.on('dialog', (d) => d.dismiss());
+  await no.goto(link2);
+  await no.waitForFunction(() => !!window.valleyVis);
+  await no.waitForTimeout(400);
+  check('share: declining keeps your settings but still opens the routine', (await no.evaluate(() => window.valleyVis.store.state.settings.robot.length)) === 15.875 && (await no.evaluate(() => window.valleyVis.store.state.project.name)) === original.name);
+  await ctxNo.close();
+  // damaged links fail politely
+  for (const bad of ['#r=1AAAA', '#r=0bm90IGpzb24', '#r=9zzz', '#r=', '#r=0e30']) {
+    const b = await newPage(browser, url + bad);
+    await b.waitForTimeout(300);
+    const alive = await b.evaluate(() => window.valleyVis.store.routines().length);
+    check(`share: damaged link ${bad} is ignored without breaking the app`, alive === 1 && b.errors.length === 0, `${alive} ${b.errors.join(' | ')}`);
+    await b.context().close();
+  }
+  check('share: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.helpAndShortcutGuards = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  await page.click('#btnHelp');
+  check('help: opens from the ? button', !(await t.ev(() => document.getElementById('helpOverlay').hidden)));
+  await page.keyboard.press('Escape');
+  check('help: Escape closes it', await t.ev(() => document.getElementById('helpOverlay').hidden));
+  await page.locator('#field').focus();
+  await page.keyboard.press('?');
+  check('help: the ? key opens it', !(await t.ev(() => document.getElementById('helpOverlay').hidden)));
+  // editor shortcuts are off while a dialog is open
+  await page.keyboard.press('Escape');
+  await page.click('[data-step="u2"] .hd');
+  await page.click('#btnExport');
+  await page.keyboard.press('Delete');
+  await page.keyboard.press(' ');
+  check('guard: Delete and Space do nothing to the routine while a dialog is open', (await t.project()).steps.length === 6 && !(await t.ev(() => window.valleyVis.store.playback.playing)));
+  await page.keyboard.press('Escape');
+  await page.click('#btnRoutines');
+  await page.keyboard.press('Delete');
+  check('guard: Delete does nothing while a menu is open', (await t.project()).steps.length === 6);
+  await page.keyboard.press('Escape');
+  // typing ? in a text field does not open help
+  await page.locator('#projectName').click();
+  await page.keyboard.type('What?');
+  check('help: typing ? in a field does not open help', await t.ev(() => document.getElementById('helpOverlay').hidden));
+  check('help: no page errors', page.errors.length === 0, page.errors.join(' | '));
   await page.context().close();
 };
 
@@ -408,8 +583,7 @@ tests.settings = async (browser, url) => {
 tests.steps = async (browser, url) => {
   const page = await newPage(browser, url);
   const t = helpers(page);
-  page.once('dialog', (d) => d.accept());
-  await page.click('#btnNew');
+  await t.menu('#btnRoutines', 'new');
   for (const label of ['+ Path', '+ Action', '+ Wait', '+ Turn', '+ Java']) await page.click(`button:text-is("${label}")`);
   let p = await t.project();
   check('steps: each type can be added in order', p.steps.map((s) => s.type).join(',') === 'path,action,wait,turn,java', p.steps.map((s) => s.type).join(','));
@@ -464,6 +638,59 @@ tests.steps = async (browser, url) => {
     check(`steps: export tab "${tab}" has code`, code.length > 100);
   }
   check('steps: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.headingHandoff = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  // toGarden (u2) ends at heading 0; make it tangent so the robot really ends facing somewhere else
+  await page.click('[data-step="u2"] .hd');
+  await page.selectOption('[data-key="u2.heading.mode"]', 'tangent');
+  await t.settle();
+  const warn = (await t.issues()).find((i) => i.stepId === 'u3' && /will be facing/.test(i.msg));
+  check('handoff: the next path is warned that it starts from a heading the robot will not have', !!warn, JSON.stringify((await t.issues()).map((i) => i.msg)));
+  const fix = page.locator('[data-key="u2.fixH"]');
+  check('handoff: the path offers to line up its end heading', (await fix.count()) === 1);
+  const label = await fix.textContent();
+  await fix.click();
+  await t.settle();
+  const p = await t.project();
+  check('handoff: the button sets the end heading to where the robot ends', `Set end heading to ${p.steps[1].endH}°` === label, `${label} vs ${p.steps[1].endH}`);
+  check('handoff: the warning goes away', !(await t.issues()).some((i) => /will be facing/.test(i.msg)));
+  check('handoff: the offer disappears once they match', (await page.locator('[data-key="u2.fixH"]').count()) === 0);
+  // same thing while previewing red: the stored heading is still blue-frame
+  await page.keyboard.press('Control+z');
+  await page.click('#allianceToggle button[data-alliance="red"]');
+  await t.settle();
+  await page.locator('[data-key="u2.fixH"]').click();
+  await t.settle();
+  check('handoff: fixing it in the red preview stores the same blue-frame heading', (await t.project()).steps[1].endH === p.steps[1].endH, String((await t.project()).steps[1].endH));
+  // a turn in between resets the heading, so no warning
+  await page.click('#allianceToggle button[data-alliance="blue"]');
+  await page.keyboard.press('Control+z');
+  await t.ev(() => window.valleyVis.store.update((pr) => { pr.steps.splice(2, 0, { id: 'tn', type: 'turn', h: 0 }); }));
+  await t.settle();
+  check('handoff: a turn step in between clears the warning', !(await t.issues()).some((i) => /will be facing/.test(i.msg)));
+  check('handoff: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.zoneReadout = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  await page.click('#tabs button[data-tab="zones"]');
+  const text = await page.locator('.card .hd:has-text("Hive frame leg (x≈96)") .dur').textContent();
+  const shown = Number((text.match(/closest ([\d.]+) in/) || [])[1]);
+  const real = await t.ev(() => window.valleyVis.store.derived().collisions.closest['hive-leg-back'].dist);
+  check('zones: each zone shows the closest the robot gets', near(shown, real, 0.06) && real > 2, `${text} vs ${real}`);
+  await page.click('.card .hd:has-text("Hive frame leg (x≈96)")');
+  check('zones: the selected zone names the step', /Closest approach: [\d.]+ in on (step \d+|the park route)/.test(await page.locator('.card.sel .stat').textContent()), await page.locator('.card.sel .stat').textContent());
+  // disabling the zone hides the readout
+  await page.click('.card.sel input[data-key$=".en"]');
+  await t.settle();
+  check('zones: a disabled zone has no readout', (await page.locator('.card .hd:has-text("Hive frame leg (x≈96)") .dur').count()) === 0);
+  check('zones readout: no page errors', page.errors.length === 0, page.errors.join(' | '));
   await page.context().close();
 };
 
@@ -611,8 +838,7 @@ tests.presetsAndExport = async (browser, url) => {
   const page = await newPage(browser, url, { context: { permissions: ['clipboard-read', 'clipboard-write'] } });
   const t = helpers(page);
   for (const id of ['up', 'solo', 'down']) {
-    await page.selectOption('#presetSelect', id);
-    await t.settle();
+    await t.example(id);
     for (const al of ['red', 'blue']) {
       await page.click(`#allianceToggle button[data-alliance="${al}"]`);
       await t.settle();
@@ -628,7 +854,7 @@ tests.presetsAndExport = async (browser, url) => {
     check(`preset ${id}: Download gives a .java file`, dl.suggestedFilename().endsWith('.java'), dl.suggestedFilename());
     await page.keyboard.press('Escape');
   }
-  check('presets: undo returns to the previous routine', await (async () => { await page.keyboard.press('Control+z'); return /Solo/.test((await t.project()).name); })());
+  check('presets: each example was added as its own routine', (await t.ev(() => window.valleyVis.store.routines())).length === 4);
   check('presets: no page errors', page.errors.length === 0, page.errors.join(' | '));
   await page.context().close();
 };

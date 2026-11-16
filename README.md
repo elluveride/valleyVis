@@ -36,6 +36,9 @@ Then open <http://localhost:8000>. Any static host works, because ES modules nee
 | Mark a no-go area | Open the *Zones* tab, pick Rectangle/Circle/Polygon, draw it, then set the clearance. |
 | Check red | Use the Blue/Red toggle. You design in the blue frame, and red is previewed through `AutoPaths.RED` (`mirrorX(72).mirrorY(72)`). |
 | Get code | Click **Export Java**. |
+| Keep several autos | **Routines ▾** lists every routine saved in this browser. Edits save as you go, and each routine has its own undo history. Examples and opened files are added to the list; nothing is overwritten. |
+| Send a routine to a teammate | **Share** copies a link that holds the routine (optionally with your robot settings). Nothing is uploaded: the link itself is the data. Or use *Routines → Save this routine as a file* and commit the `.vvis.json`. |
+| See all shortcuts | Press **?**. |
 
 ### Exports
 
@@ -105,7 +108,9 @@ Code map (`src/`):
 - `simulate.js`: timeline, velocity profile, park route
 - `collision.js`: footprint vs zones / walls
 - `codegen.js`: Java export
-- `lint.js`: subsystem conflicts, naming
+- `lint.js`: subsystem conflicts, naming, heading hand-offs between paths
+- `share.js`: share-link encoding
+- `store.js`: routine library, undo/redo, settings, saving to the browser
 - `render.js` / `interact.js`: canvas
 - `ui/`: panels and dialogs
 - `presets.js`: the team's existing Up / Solo / Down routines, rebuilt for comparison

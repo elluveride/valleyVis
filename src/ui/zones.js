@@ -65,9 +65,13 @@ export function renderZonesTab(container, app) {
   for (const z of project.zones || []) {
     const sel = ui.selectedZoneId === z.id;
     const hits = d.collisions.violations.filter((v) => v.zoneId === z.id);
+    const near = z.enabled === false ? null : d.collisions.closest[z.id];
+    const nearStep = near ? project.steps.findIndex((st) => st.id === near.stepId) : -1;
+    const nearWhere = !near ? '' : near.stepId === 'park' ? 'on the park route' : near.stepId === 'start' ? 'at the start pose' : nearStep >= 0 ? `on step ${nearStep + 1}` : '';
     const hd = h('div.hd', { onclick: () => app.store.setUi({ selectedZoneId: sel ? null : z.id, selectedStepId: null }) }, [
       h('span.chip', { style: { background: z.enabled === false ? '#475569' : '#fb7185' } }),
       h('span.title', { text: `${z.name} · ${z.shape} · ${z.clearance} in` }),
+      near ? h(`span.dur${near.dist < z.clearance ? '.over' : ''}`, { title: `Closest the robot's edge gets to this zone, ${nearWhere}`, text: `closest ${near.dist.toFixed(1)} in` }) : null,
       hits.length ? h('span.dot.err', { title: `${hits.length} step(s) violate this zone` }) : null,
       h('button.ghost', { title: 'Delete zone', text: '✕', onclick: (e) => {
         e.stopPropagation();
@@ -75,7 +79,14 @@ export function renderZonesTab(container, app) {
       } }),
     ]);
     const card = h(`div.card${sel ? '.sel' : ''}`, {}, [hd]);
-    if (sel) card.append(h('div.bd', {}, zoneFields(app, z)));
+    if (sel) {
+      const body = h('div.bd', {}, zoneFields(app, z));
+      if (near) {
+        body.append(h('div.stat', { text: `Closest approach: ${near.dist.toFixed(1)} in ${nearWhere} (needs ${z.clearance} in).` }));
+        if (nearStep >= 0) body.append(h('button.small', { text: `Show step ${nearStep + 1}`, onclick: () => app.store.setUi({ selectedStepId: near.stepId, selectedZoneId: null, tab: 'routine' }) }));
+      }
+      card.append(body);
+    }
     container.append(card);
   }
   container.append(h('div.add-row', {}, [

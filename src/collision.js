@@ -152,6 +152,12 @@ export function checkCollisions(sim, resolved, settings) {
     for (const leg of sim.park.legs) checkPoses(pathPoses(leg), resolved.zones, settings, sink, 'park');
   }
   const violations = [...sink.values()].filter((r) => r.hits.length).map((r) => ({ ...r, hits: thin(r.hits) }));
+  // closest the robot ever gets to each zone, and on which step
+  const closest = {};
+  for (const r of sink.values()) {
+    if (r.zoneId === 'wall') continue;
+    if (!closest[r.zoneId] || r.minDist < closest[r.zoneId].dist) closest[r.zoneId] = { dist: r.minDist, stepId: r.stepId };
+  }
   const issues = violations.map((v) => ({
     level: v.stepId === 'park' ? 'warn' : 'error',
     stepId: v.stepId === 'park' || v.stepId === 'start' ? null : v.stepId,
@@ -160,5 +166,5 @@ export function checkCollisions(sim, resolved, settings) {
       ? `${v.stepId === 'park' ? 'Park route' : v.stepId === 'start' ? 'Start pose' : 'Robot'} goes ${v.overrun.toFixed(1)} in past the field wall.`
       : `${v.stepId === 'park' ? 'Park route' : v.stepId === 'start' ? 'Start pose' : 'Robot'} comes within ${v.minDist.toFixed(1)} in of "${v.zoneName}" (needs ${v.clearance} in).`,
   }));
-  return { violations, issues };
+  return { violations, issues, closest };
 }

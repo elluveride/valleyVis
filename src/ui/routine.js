@@ -283,7 +283,18 @@ function pathEditor(app, step, m, item, rstep) {
 
   if (rstep && item) {
     const moveDur = item.motion?.prof?.duration ?? 0;
-    body.push(h('div.stat', { text: `length ${rstep.geom.length.toFixed(1)} in · drive ${moveDur.toFixed(2)} s · step ${(item.t1 - item.t0).toFixed(2)} s · ends facing ${displayDeg(rstep.interp(1))}°` }));
+    // headings are stored in the blue frame; the preview may be mirrored for red
+    const fr = app.store.derived().resolved.frame;
+    const actual = displayDeg(fr.heading(rstep.interp(1)));
+    const declared = displayDeg(fr.heading(rstep.end.h));
+    body.push(h('div.stat', { text: `length ${rstep.geom.length.toFixed(1)} in · drive ${moveDur.toFixed(2)} s · step ${(item.t1 - item.t0).toFixed(2)} s · ends facing ${actual}°` }));
+    const off = Math.abs(((actual - declared + 540) % 360) - 180);
+    if (off > 1) {
+      body.push(h('div.sub', {}, [
+        h('div.hint', { text: `With this heading mode the robot ends facing ${actual}°, but the end pose says ${declared}°. The next path's "start heading" comes from the end pose, so it would begin with a jump.` }),
+        h('button.small', { 'data-key': `${key}.fixH`, text: `Set end heading to ${Math.round(actual * 10) / 10}°`, onclick: () => m((s) => { s.endH = Math.round(actual * 10) / 10; }) }),
+      ]));
+    }
   }
   return body;
 }

@@ -11,20 +11,19 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="logo">◆</span> ValleyVis <span class="tag">ValleyLib · Pedro 3 · BIOBUZZ</span></div>
+    <button id="btnRoutines" aria-haspopup="menu" aria-expanded="false" title="Your saved routines, examples, and files">Routines ▾</button>
     <input id="projectName" class="project-name" aria-label="Routine name" spellcheck="false">
     <div class="seg" id="allianceToggle" role="group" aria-label="Preview alliance">
       <button data-alliance="blue" class="blue">Blue</button>
       <button data-alliance="red" class="red">Red</button>
     </div>
     <div class="spacer"></div>
-    <select id="presetSelect" aria-label="Load an example routine"><option value="">Examples…</option></select>
-    <button id="btnNew" title="New routine">New</button>
-    <button id="btnOpen" title="Open a .vvis.json file">Open</button>
-    <button id="btnSave" title="Download this routine as .vvis.json">Save</button>
     <button id="btnUndo" title="Undo (Ctrl+Z)">↶</button>
     <button id="btnRedo" title="Redo (Ctrl+Shift+Z)">↷</button>
+    <button id="btnShare" aria-haspopup="menu" aria-expanded="false" title="Copy a link that opens this routine">Share</button>
     <button id="btnExport" class="primary" title="Generate Java">Export Java</button>
     <button id="btnSettings" title="Robot, motion, commands and code settings">Settings</button>
+    <button id="btnHelp" title="Mouse and keyboard help (?)" aria-label="Help">?</button>
     <input type="file" id="fileInput" accept=".json,application/json" hidden>
   </header>
 
@@ -51,6 +50,7 @@
 
   <div class="overlay" id="settingsOverlay" hidden></div>
   <div class="overlay" id="exportOverlay" hidden></div>
+  <div class="overlay" id="helpOverlay" hidden></div>
   <div class="toast" id="toast" hidden></div>
 
   <script type="module" src="src/main.js"></script>

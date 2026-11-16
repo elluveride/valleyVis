@@ -45,6 +45,45 @@ export function lintProject(project, resolved) {
       }
     }
   }
+  issues.push(...headingHandoffIssues(resolved));
   if (!project.steps?.length) issues.push({ level: 'info', stepId: null, msg: 'No steps yet: add a path or action from the Routine tab.' });
+  return issues;
+}
+
+function usesStartHeading(heading) {
+  const h = heading || { mode: 'linear' };
+  if (h.mode === 'linear') return true;
+  if (h.mode === 'constant') return (h.hold || 'start') === 'start';
+  if (h.mode === 'piecewise') {
+    return (h.pieces || []).some((p) => (p.mode === 'constant' && (p.hold || 'start') === 'start') || (p.mode === 'linear' && (p.from || 'start') === 'start') || (p.mode === 'linear' && p.to === 'start'));
+  }
+  return false;
+}
+
+/**
+ * A path's "start heading" is the previous end pose's heading. If the previous path's heading
+ * mode leaves the robot facing somewhere else (tangent, facing a point...), the next path
+ * begins by snapping to a heading the robot does not have.
+ */
+function headingHandoffIssues(resolved) {
+  const issues = [];
+  let prev = null; // previous path step, cleared by a turn (which sets a fresh heading)
+  for (const step of resolved.steps) {
+    if (step.type === 'turn') prev = null;
+    if (step.type !== 'path') continue;
+    if (prev && usesStartHeading(step.raw.heading)) {
+      const actual = prev.interp(1);
+      const diff = Math.abs(Math.atan2(Math.sin(actual - prev.end.h), Math.cos(actual - prev.end.h)));
+      if (diff > (2 * Math.PI) / 180) {
+        const deg = (r) => Math.round((Math.atan2(Math.sin(resolved.frame.heading(r)), Math.cos(resolved.frame.heading(r))) * 180) / Math.PI);
+        issues.push({
+          level: 'warn',
+          stepId: step.id,
+          msg: `Starts from the end pose of step ${prev.index + 1} (${deg(prev.end.h)}°), but the robot will be facing ${deg(actual)}° after that step. Open step ${prev.index + 1} and use "Set end heading" to line them up.`,
+        });
+      }
+    }
+    prev = step;
+  }
   return issues;
 }
