@@ -1,7 +1,7 @@
 // Settings page: robot constants, motion estimates, match timing, field view, constants,
 // named points, the command library, and Java export options. Saved in this browser.
 
-import { cloneDeep, DEFAULT_COMMANDS, DEFAULT_SETTINGS, mergeDefaults } from '../defaults.js';
+import { cloneDeep, DEFAULT_COMMANDS } from '../defaults.js';
 import { download, h, toast, uid } from '../util.js';
 import { checkbox, exprInput, fld, numInput, preserveFocus, selectInput, textArea, textInput } from './fields.js';
 
@@ -46,9 +46,10 @@ export function createSettingsPage(overlay, app) {
 
   function motion(s) {
     return [
-      h('p.hint', { text: 'Timeline estimates only (trapezoid profile, slowed in tight curves). PedroConstants has maxAchievableForwardVelocity 74.45 and strafe 58.21 in/s. Time a real run and tune these until the timeline matches.' }),
+      h('p.hint', { text: 'Timeline estimates only (trapezoid profile, slowed in tight curves). The two top speeds are the maxAchievable…Velocity values from PedroConstants; like Pedro, the estimate blends them by drive direction, so driving nose-first is fastest and diagonals are slowest. Time a real run and tune the rest until the timeline matches.' }),
       h('div.form-grid', {}, [
-        num('mv', 'Max velocity (in/s)', s.motion.maxVel, (st, v) => { st.motion.maxVel = v; }, { min: 1 }),
+        num('mvf', 'Top speed forward (in/s)', s.motion.maxVelForward, (st, v) => { st.motion.maxVelForward = v; }, { min: 1 }),
+        num('mvs', 'Top speed strafing (in/s)', s.motion.maxVelStrafe, (st, v) => { st.motion.maxVelStrafe = v; }, { min: 1 }),
         num('ma', 'Acceleration (in/s²)', s.motion.accel, (st, v) => { st.motion.accel = v; }, { min: 1 }),
         num('md', 'Deceleration (in/s²)', s.motion.decel, (st, v) => { st.motion.decel = v; }, { min: 1 }),
         num('ml', 'Lateral accel in curves (in/s²)', s.motion.lateralAccel, (st, v) => { st.motion.lateralAccel = v; }, { min: 1 }),
@@ -228,7 +229,8 @@ export function createSettingsPage(overlay, app) {
       try {
         const parsed = JSON.parse(await f.text());
         const incoming = parsed.kind === 'valleyvis-settings' ? parsed.settings : parsed.settings || parsed;
-        store.updateSettings((st) => { Object.assign(st, mergeDefaults(incoming, DEFAULT_SETTINGS)); });
+        if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) throw new Error('not a settings file');
+        store.replaceSettings(incoming);
         toast('Settings imported');
         rerender();
       } catch (e) {

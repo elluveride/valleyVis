@@ -1,0 +1,696 @@
+// End-to-end tests: drives the real app in headless Chromium.
+//   npm run e2e            (needs Playwright: npm i -D playwright && npx playwright install chromium)
+// Each check is independent; the run prints every failure and exits non-zero if any failed.
+const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
+const { chromium } = require('playwright');
+const { startServer } = require('./server.cjs');
+
+const ROOT = path.resolve(__dirname, '..', '..');
+const results = [];
+const only = process.argv[2] || null;
+
+function check(name, cond, detail = '') {
+  results.push({ name, ok: !!cond, detail });
+  if (!cond) console.log(`  FAIL ${name} ${detail ? `:: ${detail}` : ''}`);
+}
+const near = (a, b, eps = 0.01) => Math.abs(a - b) <= eps;
+
+async function newPage(browser, url, opts = {}) {
+  const ctx = await browser.newContext({ viewport: opts.viewport || { width: 1500, height: 950 }, acceptDownloads: true, ...(opts.context || {}) });
+  const page = await ctx.newPage();
+  page.errors = [];
+  page.on('pageerror', (e) => page.errors.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error') page.errors.push(`console: ${m.text()}`); });
+  if (opts.init) await ctx.addInitScript(opts.init);
+  await page.goto(url + (opts.hash || ''));
+  await page.waitForFunction(() => !!window.valleyVis);
+  await page.waitForTimeout(150);
+  return page;
+}
+
+const helpers = (page) => {
+  const ev = (fn, arg) => page.evaluate(fn, arg);
+  const project = () => ev(() => JSON.parse(JSON.stringify(window.valleyVis.store.state.project)));
+  const settings = () => ev(() => JSON.parse(JSON.stringify(window.valleyVis.store.state.settings)));
+  const ui = () => ev(() => JSON.parse(JSON.stringify(window.valleyVis.store.state.ui)));
+  /** client coordinates of a design-frame (blue) field point under the current alliance + orientation */
+  const at = async (x, y) => ev(([px, py]) => {
+    const app = window.valleyVis;
+    const fr = app.store.derived().resolved.frame;
+    const real = fr.point(px, py);
+    const s = app.view().toScreen(real);
+    const r = document.getElementById('field').getBoundingClientRect();
+    return { x: r.left + s.x, y: r.top + s.y };
+  }, [x, y]);
+  const atReal = async (x, y) => ev(([px, py]) => {
+    const app = window.valleyVis;
+    const s = app.view().toScreen({ x: px, y: py });
+    const r = document.getElementById('field').getBoundingClientRect();
+    return { x: r.left + s.x, y: r.top + s.y };
+  }, [x, y]);
+  const handle = async (pred) => ev(async (src) => {
+    // handles are refreshed on the next animation frame after a change
+    await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+    // eslint-disable-next-line no-new-func
+    const f = new Function('h', `return (${src})(h)`);
+    const hd = window.valleyVis.lastRender().handles.filter((h) => f(h));
+    const r = document.getElementById('field').getBoundingClientRect();
+    return hd.map((h) => ({ ...h, cx: r.left + h.x, cy: r.top + h.y }));
+  }, pred.toString());
+  const drag = async (from, to, opts = {}) => {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    if (opts.shift) await page.keyboard.down('Shift');
+    await page.mouse.move((from.x + to.x) / 2, (from.y + to.y) / 2, { steps: 3 });
+    await page.mouse.move(to.x, to.y, { steps: 3 });
+    await page.mouse.up();
+    if (opts.shift) await page.keyboard.up('Shift');
+    await page.waitForTimeout(40);
+  };
+  const settle = () => page.waitForTimeout(60);
+  const issues = () => ev(() => window.valleyVis.store.derived().issues.map((i) => ({ level: i.level, msg: i.msg, stepId: i.stepId })));
+  return { ev, project, settings, ui, at, atReal, handle, drag, settle, issues };
+};
+
+const tests = {};
+
+tests.freshLoad = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  const p = await t.project();
+  check('fresh: loads the Up example', p.steps.length === 6 && /Up/.test(p.name), JSON.stringify(p.name));
+  const size = await t.ev(() => { const c = document.getElementById('field'); return [c.clientWidth, c.clientHeight, c.width, c.height]; });
+  check('fresh: canvas is square and sized', size[0] === size[1] && size[0] > 300, JSON.stringify(size));
+  check('fresh: field image loaded', await t.ev(() => new Promise((res) => { const i = new Image(); i.onload = () => res(i.naturalWidth > 0); i.onerror = () => res(false); i.src = 'assets/field-biobuzz.webp'; })));
+  check('fresh: no problems on the team Up routine', (await t.issues()).filter((i) => i.level !== 'info').length === 0, JSON.stringify(await t.issues()));
+  check('fresh: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.startPose = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  const before = await t.project();
+  const from = await t.at(79.9375, 136.0625);
+  const to = await t.at(60, 120);
+  await t.drag(from, to);
+  let p = await t.project();
+  check('start: drag moves start pose (snapped to 0.5)', near(p.start.x, 60, 0.26) && near(p.start.y, 120, 0.26) && Number.isInteger(p.start.x * 2), JSON.stringify(p.start));
+  check('start: drag selects the start card', (await t.ui()).selectedStepId === '__start');
+  const knob = (await t.handle((h) => h.kind === 'startHeading'))[0];
+  check('start: heading knob is shown', !!knob);
+  if (knob) {
+    // drag knob to point along +y (heading 90)
+    const c = await t.at(p.start.x, p.start.y);
+    const target = await t.at(p.start.x, p.start.y + 30);
+    await t.drag({ x: knob.cx, y: knob.cy }, target);
+    p = await t.project();
+    check('start: knob sets heading 90', p.start.h === 90, String(p.start.h));
+    void c;
+  }
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+z');
+  p = await t.project();
+  check('start: two undos restore the expression start pose', JSON.stringify(p.start) === JSON.stringify(before.start), JSON.stringify(p.start));
+  check('start: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.pathEditing = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  await page.click('[data-step="u3"] .hd'); // readyShoot1: line from garden to (96,108)
+  let end = (await t.handle((h) => h.kind === 'segEnd' && h.stepId === 'u3'))[0];
+  check('path: selected path shows an end handle', !!end);
+  await t.drag({ x: end.cx, y: end.cy }, await t.at(90, 100));
+  let p = await t.project();
+  check('path: drag end point', near(p.steps[2].segments[0].end.x, 90, 0.26) && near(p.steps[2].segments[0].end.y, 100, 0.26), JSON.stringify(p.steps[2].segments[0].end));
+  // shift = fine precision
+  end = (await t.handle((h) => h.kind === 'segEnd' && h.stepId === 'u3'))[0];
+  const fine = await t.at(91.37, 101.21);
+  await t.drag({ x: end.cx, y: end.cy }, fine, { shift: true });
+  p = await t.project();
+  const e = p.steps[2].segments[0].end;
+  check('path: shift-drag is not snapped to 0.5', !Number.isInteger(e.x * 2) || !Number.isInteger(e.y * 2), JSON.stringify(e));
+  check('path: shift-drag lands near the pointer', near(e.x, 91.37, 0.3) && near(e.y, 101.21, 0.3), JSON.stringify(e));
+  // end heading knob
+  const knob = (await t.handle((h) => h.kind === 'endHeading' && h.stepId === 'u3'))[0];
+  await t.drag({ x: knob.cx, y: knob.cy }, await t.at(e.x + 30, e.y));
+  p = await t.project();
+  check('path: end heading knob sets 0°', p.steps[2].endH === 0, String(p.steps[2].endH));
+  // double-click on the line adds a control point (line -> curve)
+  const mid = await t.ev(() => {
+    const app = window.valleyVis;
+    const st = app.store.derived().resolved.steps[2];
+    const q = st.geom.pointAt(0.5);
+    const s = app.view().toScreen(q);
+    const r = document.getElementById('field').getBoundingClientRect();
+    return { x: r.left + s.x, y: r.top + s.y };
+  });
+  await page.mouse.dblclick(mid.x, mid.y);
+  await t.settle();
+  p = await t.project();
+  check('path: double-click turns the line into a curve with 1 control', p.steps[2].segments[0].type === 'curve' && p.steps[2].segments[0].controls.length === 1, JSON.stringify(p.steps[2].segments[0]));
+  // drag the control point
+  let ctrl = (await t.handle((h) => h.kind === 'control' && h.stepId === 'u3'))[0];
+  await t.drag({ x: ctrl.cx, y: ctrl.cy }, await t.at(120, 110));
+  p = await t.project();
+  check('path: drag control point', near(p.steps[2].segments[0].controls[0].x, 120, 0.26) && near(p.steps[2].segments[0].controls[0].y, 110, 0.26), JSON.stringify(p.steps[2].segments[0].controls));
+  // right-click removes it
+  ctrl = (await t.handle((h) => h.kind === 'control' && h.stepId === 'u3'))[0];
+  await page.mouse.click(ctrl.cx, ctrl.cy, { button: 'right' });
+  await t.settle();
+  p = await t.project();
+  check('path: right-click removes the control (back to a line)', p.steps[2].segments[0].type === 'line' && p.steps[2].segments[0].controls.length === 0, JSON.stringify(p.steps[2].segments[0]));
+  // dragging the path start moves the previous path's end
+  const startH = (await t.handle((h) => h.kind === 'pathStart' && h.stepId === 'u3'))[0];
+  await t.drag({ x: startH.cx, y: startH.cy }, await t.at(130, 130));
+  p = await t.project();
+  check('path: dragging a path start moves the previous path end', near(p.steps[1].segments[0].end.x, 130, 0.26) && near(p.steps[1].segments[0].end.y, 130, 0.26), JSON.stringify(p.steps[1].segments[0].end));
+  check('path: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.markers = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  await page.click('[data-step="u2"] .hd');
+  await page.click('button:has-text("+ marker")');
+  let p = await t.project();
+  check('marker: added at 50%', p.steps[1].markers.length === 1 && p.steps[1].markers[0].at === 0.5);
+  const mk = (await t.handle((h) => h.kind === 'marker'))[0];
+  check('marker: handle is drawn', !!mk);
+  const target = await t.ev(() => {
+    const app = window.valleyVis;
+    const st = app.store.derived().resolved.steps[1];
+    const s = app.view().toScreen(st.geom.pointAt(0.8));
+    const r = document.getElementById('field').getBoundingClientRect();
+    return { x: r.left + s.x, y: r.top + s.y };
+  });
+  await t.drag({ x: mk.cx, y: mk.cy }, target);
+  p = await t.project();
+  check('marker: drag along the path to ~80%', near(p.steps[1].markers[0].at, 0.8, 0.03), String(p.steps[1].markers[0].at));
+  const spans = await t.ev(() => window.valleyVis.store.derived().sim.items[1].spans.map((s) => s.kind));
+  check('marker: appears on the timeline', spans.includes('marker'), JSON.stringify(spans));
+  const mk2 = (await t.handle((h) => h.kind === 'marker'))[0];
+  await page.mouse.click(mk2.cx, mk2.cy, { button: 'right' });
+  await t.settle();
+  p = await t.project();
+  check('marker: right-click deletes', p.steps[1].markers.length === 0);
+  check('marker: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.zones = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  await page.click('#tabs button[data-tab="zones"]');
+  // rectangle
+  await page.click('.seg button:has-text("Rectangle")');
+  await t.drag(await t.at(20, 20), await t.at(40, 50));
+  let p = await t.project();
+  let z = p.zones[p.zones.length - 1];
+  check('zone: rectangle drawn', z.shape === 'rect' && near(z.x, 20, 0.6) && near(z.y, 20, 0.6) && near(z.w, 20, 0.6) && near(z.h, 30, 0.6), JSON.stringify(z));
+  check('zone: tool returns to select and the zone is selected', (await t.ui()).tool === 'select' && (await t.ui()).selectedZoneId === z.id);
+  // circle
+  await page.click('.seg button:has-text("Circle")');
+  await t.drag(await t.at(30, 110), await t.at(30, 120));
+  p = await t.project();
+  z = p.zones[p.zones.length - 1];
+  check('zone: circle drawn', z.shape === 'circle' && near(z.cx, 30, 0.6) && near(z.cy, 110, 0.6) && near(z.r, 10, 0.6), JSON.stringify(z));
+  // polygon: click 3 corners then Enter
+  await page.click('.seg button:has-text("Polygon")');
+  for (const [x, y] of [[100, 20], [120, 20], [110, 40]]) {
+    const c = await t.at(x, y);
+    await page.mouse.click(c.x, c.y);
+  }
+  await page.keyboard.press('Enter');
+  await t.settle();
+  p = await t.project();
+  z = p.zones[p.zones.length - 1];
+  check('zone: polygon finished with Enter', z.shape === 'poly' && z.points.length === 3, JSON.stringify(z));
+  // polygon: finish by double-click
+  await page.click('.seg button:has-text("Polygon")');
+  for (const [x, y] of [[100, 60], [120, 60], [120, 80]]) {
+    const c = await t.at(x, y);
+    await page.mouse.click(c.x, c.y);
+  }
+  const last = await t.at(100, 80);
+  await page.mouse.dblclick(last.x, last.y);
+  await t.settle();
+  p = await t.project();
+  z = p.zones[p.zones.length - 1];
+  check('zone: polygon finished with double-click has 4 corners', z.shape === 'poly' && z.points.length === 4, JSON.stringify(z.points));
+  // Escape cancels a draft
+  const count = p.zones.length;
+  await page.click('.seg button:has-text("Polygon")');
+  const c1 = await t.at(60, 20);
+  await page.mouse.click(c1.x, c1.y);
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  p = await t.project();
+  check('zone: Escape cancels a polygon draft', p.zones.length === count && (await t.ui()).tool === 'select');
+  // move the rectangle by its body
+  const rect = p.zones.find((q) => q.shape === 'rect' && q.name.startsWith('Keep-out'));
+  await page.click(`.card .hd:has-text("${rect.name}")`);
+  const body = (await t.handle((h) => h.kind === 'zoneBody'))
+    .find((h) => h.zoneId === rect.id);
+  await t.drag({ x: body.cx, y: body.cy }, await t.at(40, 45));
+  p = await t.project();
+  let r2 = p.zones.find((q) => q.id === rect.id);
+  check('zone: drag body moves the rectangle', near(r2.x, 30, 0.6) && near(r2.y, 30, 0.6) && near(r2.w, 20, 0.6), JSON.stringify(r2));
+  // resize by a corner
+  const corner = (await t.handle((h) => h.kind === 'zoneVertex')).find((h) => h.zoneId === rect.id && h.vertex === 2);
+  await t.drag({ x: corner.cx, y: corner.cy }, await t.at(60, 70));
+  p = await t.project();
+  r2 = p.zones.find((q) => q.id === rect.id);
+  check('zone: drag corner resizes', near(r2.x, 30, 0.6) && near(r2.w, 30, 0.6) && near(r2.h, 40, 0.6), JSON.stringify(r2));
+  // collision is reported when a zone sits on the path
+  await page.click('.seg button:has-text("Rectangle")');
+  await t.drag(await t.at(100, 112), await t.at(112, 124));
+  const iss = await t.issues();
+  check('zone: path through a zone is reported', iss.some((i) => i.level === 'error' && /Keep-out/.test(i.msg)), JSON.stringify(iss.map((i) => i.msg)));
+  // delete with the keyboard
+  const n = (await t.project()).zones.length;
+  await page.locator('#field').focus();
+  await page.keyboard.press('Delete');
+  check('zone: Delete removes the selected zone', (await t.project()).zones.length === n - 1);
+  check('zone: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.redFrame = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  await page.click('#allianceToggle button[data-alliance="red"]');
+  await page.click('[data-step="u3"] .hd');
+  const end = (await t.handle((h) => h.kind === 'segEnd' && h.stepId === 'u3'))[0];
+  // drop it at real (50, 40) => blue-frame (94, 104)
+  await t.drag({ x: end.cx, y: end.cy }, await t.atReal(50, 40));
+  let p = await t.project();
+  const e = p.steps[2].segments[0].end;
+  check('red: dragging in the red view stores blue-frame coordinates', near(e.x, 94, 0.3) && near(e.y, 104, 0.3), JSON.stringify(e));
+  const knob = (await t.handle((h) => h.kind === 'endHeading' && h.stepId === 'u3'))[0];
+  await t.drag({ x: knob.cx, y: knob.cy }, await t.atReal(50, 80)); // real heading +90 => blue-frame -90
+  p = await t.project();
+  check('red: heading knob stores the blue-frame heading', p.steps[2].endH === -90, String(p.steps[2].endH));
+  // a zone drawn on red with "mirror" lands in the blue frame
+  await page.click('#tabs button[data-tab="zones"]');
+  await page.click('.seg button:has-text("Rectangle")');
+  await t.drag(await t.atReal(10, 10), await t.atReal(20, 30));
+  p = await t.project();
+  const z = p.zones[p.zones.length - 1];
+  check('red: zone drawn in red view is stored mirrored', near(z.x, 124, 0.6) && near(z.y, 114, 0.6) && near(z.w, 10, 0.6) && near(z.h, 20, 0.6), JSON.stringify(z));
+  await page.click('#allianceToggle button[data-alliance="blue"]');
+  const rz = await t.ev(() => window.valleyVis.store.derived().resolved.zones.at(-1).pts.map((q) => [q.x, q.y]));
+  check('red: the same zone appears at the mirrored spot on blue', rz.some(([x, y]) => near(x, 124, 0.6) && near(y, 114, 0.6)), JSON.stringify(rz));
+  check('red: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.saveOpen = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  await page.selectOption('#presetSelect', 'solo');
+  const before = await t.project();
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btnSave')]);
+  const file = path.join(os.tmpdir(), `vv-${Date.now()}.vvis.json`);
+  await dl.saveAs(file);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  check('save: file contains the project', saved.kind === 'valleyvis-project' && saved.project.steps.length === before.steps.length);
+  check('save: filename is derived from the routine name', /Solo/.test(dl.suggestedFilename()) && dl.suggestedFilename().endsWith('.vvis.json'), dl.suggestedFilename());
+  page.once('dialog', (d) => d.accept());
+  await page.click('#btnNew');
+  check('save: New clears the routine', (await t.project()).steps.length === 0);
+  await page.setInputFiles('#fileInput', file);
+  await page.waitForTimeout(150);
+  check('open: round trip restores the routine', JSON.stringify(await t.project()) === JSON.stringify(before));
+  // bad files do not break anything
+  const bad = path.join(os.tmpdir(), `vv-bad-${Date.now()}.json`);
+  fs.writeFileSync(bad, '{"hello": 1}');
+  await page.setInputFiles('#fileInput', bad);
+  await page.waitForTimeout(150);
+  check('open: an unrelated JSON file is rejected', JSON.stringify(await t.project()) === JSON.stringify(before));
+  fs.writeFileSync(bad, 'not json at all');
+  await page.setInputFiles('#fileInput', bad);
+  await page.waitForTimeout(150);
+  check('open: a non-JSON file is rejected', JSON.stringify(await t.project()) === JSON.stringify(before));
+  // persistence across reloads
+  await page.reload();
+  await page.waitForFunction(() => !!window.valleyVis);
+  check('persist: reload keeps the routine', JSON.stringify(await t.project()) === JSON.stringify(before));
+  check('save: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  fs.rmSync(file, { force: true });
+  fs.rmSync(bad, { force: true });
+  await page.context().close();
+};
+
+tests.settings = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  const startBefore = await t.ev(() => window.valleyVis.store.derived().resolved.start);
+  await page.click('#btnSettings');
+  const len = page.locator('[data-key="set.rl"]');
+  await len.fill('18');
+  await len.press('Tab');
+  const startAfter = await t.ev(() => window.valleyVis.store.derived().resolved.start);
+  check('settings: robot length feeds the L expression', near(startAfter.x, 72 + 9) && near(startBefore.x, 72 + 15.875 / 2), JSON.stringify([startBefore.x, startAfter.x]));
+  check('settings: focus moves to the next field on Tab', (await t.ev(() => document.activeElement?.getAttribute('data-key'))) === 'set.rw');
+  // every section renders
+  for (const name of ['Motion', 'Match timing', 'Field view', 'Constants', 'Named points', 'Commands', 'Java export', 'Import / reset', 'Robot']) {
+    await page.click(`#settingsOverlay nav button:has-text("${name}")`);
+    await page.waitForTimeout(30);
+  }
+  check('settings: all sections open without errors', page.errors.length === 0, page.errors.join(' | '));
+  // constants
+  await page.click('#settingsOverlay nav button:has-text("Constants")');
+  await page.click('#settingsOverlay .content button:has-text("+ add")');
+  await page.locator('[data-key="set.c0n"]').fill('MID_X');
+  await page.locator('[data-key="set.c0v"]').fill('82');
+  await page.locator('[data-key="set.c0j"]').fill('SoloGeometry.MID_X');
+  await page.locator('[data-key="set.c0j"]').press('Tab');
+  const s = await t.settings();
+  check('settings: constant saved', s.constants[0]?.name === 'MID_X' && s.constants[0]?.value === 82, JSON.stringify(s.constants));
+  // export / import / reset
+  await page.click('#settingsOverlay nav button:has-text("Import / reset")');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('button:has-text("Export settings")')]);
+  const file = path.join(os.tmpdir(), `vv-settings-${Date.now()}.json`);
+  await dl.saveAs(file);
+  page.once('dialog', (d) => d.accept());
+  await page.click('button:has-text("Reset everything")');
+  check('settings: reset restores defaults', (await t.settings()).robot.length === 15.875 && (await t.settings()).constants.length === 0);
+  await page.setInputFiles('#settingsOverlay input[type="file"]', file);
+  await page.waitForTimeout(150);
+  const s2 = await t.settings();
+  check('settings: import restores the exported settings', s2.robot.length === 18 && s2.constants[0]?.name === 'MID_X', JSON.stringify([s2.robot.length, s2.constants]));
+  await page.keyboard.press('Escape');
+  check('settings: Escape closes the page', await t.ev(() => document.getElementById('settingsOverlay').hidden));
+  // the constant works in a coordinate field and exports with its Java name
+  await page.click('[data-step="u3"] .hd');
+  const x = page.locator('[data-key="u3.x"]');
+  await x.fill('MID_X+10');
+  await x.press('Tab');
+  const endX = await t.ev(() => window.valleyVis.store.derived().resolved.steps[2].end.x);
+  check('settings: custom constant evaluates in a field', near(endX, 92), String(endX));
+  await page.click('#btnExport');
+  const code = await page.locator('#exportOverlay pre.code').textContent();
+  check('settings: custom constant exports with its Java name', code.includes('SoloGeometry.MID_X + 10.0'), code.match(/Pose readyToShoot.*/)?.[0]);
+  await page.reload();
+  await page.waitForFunction(() => !!window.valleyVis);
+  check('settings: persist across reload', (await t.settings()).robot.length === 18);
+  check('settings: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  fs.rmSync(file, { force: true });
+  await page.context().close();
+};
+
+tests.steps = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  page.once('dialog', (d) => d.accept());
+  await page.click('#btnNew');
+  for (const label of ['+ Path', '+ Action', '+ Wait', '+ Turn', '+ Java']) await page.click(`button:text-is("${label}")`);
+  let p = await t.project();
+  check('steps: each type can be added in order', p.steps.map((s) => s.type).join(',') === 'path,action,wait,turn,java', p.steps.map((s) => s.type).join(','));
+  // new steps are inserted after the selected one
+  await page.click(`[data-step="${p.steps[0].id}"] .hd`);
+  await page.click('button:text-is("+ Wait")');
+  p = await t.project();
+  check('steps: a new step goes after the selected step', p.steps[1].type === 'wait' && p.steps.length === 6, p.steps.map((s) => s.type).join(','));
+  // reorder / duplicate / delete
+  const firstId = p.steps[0].id;
+  await page.click(`[data-step="${firstId}"] button[title="Move down"]`);
+  p = await t.project();
+  check('steps: move down', p.steps[1].id === firstId);
+  await page.click(`[data-step="${firstId}"] button[title="Duplicate"]`);
+  p = await t.project();
+  check('steps: duplicate inserts a renamed copy', p.steps[2].type === 'path' && p.steps[2].id !== firstId && p.steps[2].name !== p.steps[1].name, JSON.stringify([p.steps[1].name, p.steps[2].name]));
+  await page.click(`[data-step="${p.steps[2].id}"] button[title="Delete"]`);
+  p = await t.project();
+  check('steps: delete', p.steps.length === 6);
+  // path editor: heading modes all render and export
+  await page.click(`[data-step="${firstId}"] .hd`);
+  if ((await t.ui()).selectedStepId !== firstId) await page.click(`[data-step="${firstId}"] .hd`);
+  for (const mode of ['constant', 'tangent', 'reverseTangent', 'facing', 'piecewise', 'linear']) {
+    await page.selectOption(`[data-key="${firstId}.heading.mode"]`, mode);
+    await t.settle();
+    p = await t.project();
+    check(`steps: heading mode ${mode} applies`, p.steps.find((s) => s.id === firstId).heading.mode === mode);
+  }
+  // segments: add a segment, make it a curve, add a control
+  await page.click('button:has-text("+ segment")');
+  await page.selectOption(`[data-key="${firstId}.seg1.type"]`, 'curve');
+  await page.click(`.sub .sub:has([data-key="${firstId}.seg1.type"]) button:has-text("+ control point")`);
+  p = await t.project();
+  const st = p.steps.find((s) => s.id === firstId);
+  check('steps: multi-segment path with a 2-control curve', st.segments.length === 2 && st.segments[1].type === 'curve' && st.segments[1].controls.length === 2, JSON.stringify(st.segments));
+  // during + speed + timeout
+  await page.click('button:has-text("+ run during path")');
+  await page.locator(`[data-key="${firstId}.speed"]`).fill('0.5');
+  await page.locator(`[data-key="${firstId}.timeout"]`).fill('4');
+  await page.locator(`[data-key="${firstId}.timeout"]`).press('Tab');
+  p = await t.project();
+  const st2 = p.steps.find((s) => s.id === firstId);
+  check('steps: during/speed/timeout stored', st2.during.length === 1 && st2.maxSpeed === 0.5 && st2.timeout === 4, JSON.stringify([st2.during, st2.maxSpeed, st2.timeout]));
+  await page.locator(`[data-key="${firstId}.speed"]`).fill('');
+  await page.locator(`[data-key="${firstId}.speed"]`).press('Tab');
+  check('steps: clearing max speed stores null', (await t.project()).steps.find((s) => s.id === firstId).maxSpeed === null);
+  // export still works for this mix
+  await page.click('#btnExport');
+  for (const tab of ['Routine class', 'Blue OpMode', 'Red OpMode', 'Paste-in methods']) {
+    await page.click(`#exportOverlay .code-tabs button:has-text("${tab}")`);
+    const code = await page.locator('#exportOverlay pre.code').textContent();
+    check(`steps: export tab "${tab}" has code`, code.length > 100);
+  }
+  check('steps: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.keyboardTimeline = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  await page.locator('#field').focus();
+  await page.keyboard.press(' ');
+  await page.waitForTimeout(400);
+  const playing = await t.ev(() => window.valleyVis.store.playback.playing);
+  await page.keyboard.press(' ');
+  const time = await t.ev(() => window.valleyVis.store.playback.time);
+  check('keys: Space plays and pauses', playing && time > 0.2 && !(await t.ev(() => window.valleyVis.store.playback.playing)), String(time));
+  await page.keyboard.press('ArrowRight');
+  check('keys: ArrowRight steps 0.1 s', near(await t.ev(() => window.valleyVis.store.playback.time), time + 0.1, 0.02));
+  // typing a space in a text field must not toggle playback
+  await page.locator('#projectName').click();
+  await page.keyboard.type('a b');
+  check('keys: Space in a text field does not start playback', !(await t.ev(() => window.valleyVis.store.playback.playing)));
+  // timeline click seeks, clicking a block selects the step
+  const strip = await page.locator('.strip').boundingBox();
+  await page.mouse.click(strip.x + strip.width * 0.5, strip.y + 45);
+  const scale = await t.ev(() => window.valleyVis.store.derived().sim.end);
+  const tt = await t.ev(() => window.valleyVis.store.playback.time);
+  check('timeline: click seeks', tt > 0 && tt <= scale + 0.01, String(tt));
+  const blk = await page.locator('.strip [data-step="u2"]').boundingBox();
+  await page.mouse.click(blk.x + blk.width / 2, blk.y + blk.height / 2);
+  check('timeline: clicking a block selects that step', (await t.ui()).selectedStepId === 'u2');
+  // Delete removes the selected step; undo brings it back
+  await page.locator('#field').focus();
+  await page.keyboard.press('Delete');
+  check('keys: Delete removes the selected step', (await t.project()).steps.length === 5);
+  await page.keyboard.press('Control+z');
+  check('keys: Ctrl+Z restores it', (await t.project()).steps.length === 6);
+  await page.keyboard.press('Control+y');
+  check('keys: Ctrl+Y redoes', (await t.project()).steps.length === 5);
+  // end of playback stops at the end
+  await t.ev(() => { window.valleyVis.store.playback.speed = 4; window.valleyVis.seek(window.valleyVis.store.derived().sim.end - 0.3); });
+  await page.keyboard.press(' ');
+  await page.waitForTimeout(500);
+  const st = await t.ev(() => [window.valleyVis.store.playback.playing, window.valleyVis.store.playback.time, window.valleyVis.store.derived().sim.end]);
+  check('timeline: playback stops at the end', st[0] === false && near(st[1], st[2], 0.01), JSON.stringify(st));
+  check('keys: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.orientation = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  for (const o of ['right', 'down', 'left', 'up']) {
+    await t.ev((v) => window.valleyVis.store.updateSettings((s) => { s.field.plusX = v; }), o);
+    await t.settle();
+    await page.click('[data-step="u3"] .hd');
+    if ((await t.ui()).selectedStepId !== 'u3') await page.click('[data-step="u3"] .hd');
+    const end = (await t.handle((h) => h.kind === 'segEnd' && h.stepId === 'u3'))[0];
+    await t.drag({ x: end.cx, y: end.cy }, await t.at(80, 90));
+    const e = (await t.project()).steps[2].segments[0].end;
+    check(`orientation ${o}: drag maps back to the right field point`, near(e.x, 80, 0.3) && near(e.y, 90, 0.3), JSON.stringify(e));
+    await page.keyboard.press('Control+z');
+  }
+  check('orientation: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.badInput = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  await page.click('[data-step="u3"] .hd');
+  const x = page.locator('[data-key="u3.x"]');
+  await x.fill('nope+1');
+  check('bad: unknown name marks the field invalid', await x.evaluate((el) => el.classList.contains('invalid')));
+  check('bad: unknown name is a reported problem', (await t.issues()).some((i) => /unknown name/.test(i.msg)));
+  await x.fill('');
+  await x.press('Tab');
+  check('bad: empty coordinate is a reported problem, app still alive', (await t.issues()).some((i) => i.level === 'error') && (await t.ev(() => !!window.valleyVis.store.derived().sim)));
+  await x.fill('96');
+  await x.press('Tab');
+  // zero-length path
+  await t.ev(() => window.valleyVis.store.update((p) => { p.steps[2].segments[0].end = { x: '144-L/2', y: '144-W/2' }; }));
+  await t.settle();
+  check('bad: zero-length segment is reported', (await t.issues()).some((i) => /zero length/.test(i.msg)), JSON.stringify((await t.issues()).map((i) => i.msg)));
+  await page.keyboard.press('Control+z');
+  // unknown command id
+  await t.ev(() => window.valleyVis.store.update((p) => { p.steps[0].cmds = [{ lib: 'doesNotExist', params: {} }]; }));
+  await t.settle();
+  check('bad: unknown command is reported', (await t.issues()).some((i) => /not in the command library/.test(i.msg)));
+  await page.click('#btnExport');
+  const code = await page.locator('#exportOverlay pre.code').textContent();
+  check('bad: export marks the unknown command as a TODO', /TODO unknown command/.test(code));
+  await page.keyboard.press('Escape');
+  // invalid piecewise order
+  await t.ev(() => window.valleyVis.store.update((p) => { p.steps[1].heading.pieces[1].until = 0.1; }));
+  await t.settle();
+  check('bad: piecewise order error is reported', (await t.issues()).some((i) => /must be greater than/.test(i.msg)));
+  // empty command library
+  await t.ev(() => window.valleyVis.store.updateSettings((s) => { s.commands = []; }));
+  await t.settle();
+  await page.click('button:text-is("+ Action")');
+  await page.click('button:text-is("+ Path")');
+  check('bad: empty command library does not break adding steps', (await t.project()).steps.length === 8);
+  check('bad: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.corruptStorage = async (browser, url) => {
+  const cases = {
+    garbage: () => { localStorage.setItem('valleyvis.project.v1', '{not json'); localStorage.setItem('valleyvis.settings.v1', 'xx'); localStorage.setItem('valleyvis.ui.v1', '[1,2'); },
+    emptyObjects: () => { localStorage.setItem('valleyvis.project.v1', '{}'); localStorage.setItem('valleyvis.settings.v1', '{}'); localStorage.setItem('valleyvis.ui.v1', '{}'); },
+    wrongTypes: () => { localStorage.setItem('valleyvis.project.v1', JSON.stringify({ name: 5, steps: 'x', zones: null, start: null })); localStorage.setItem('valleyvis.settings.v1', JSON.stringify({ robot: null, commands: 'no', motion: 3, field: [], constants: null, points: {} })); },
+    partialSteps: () => { localStorage.setItem('valleyvis.project.v1', JSON.stringify({ name: 'x', start: { x: 10 }, steps: [{ type: 'path' }, { type: 'action' }, { type: 'wat' }, null, { type: 'turn' }, { type: 'wait' }, { type: 'java' }], zones: [{ shape: 'rect' }, { shape: 'poly' }, { shape: 'circle' }, null] })); },
+    nullValues: () => { localStorage.setItem('valleyvis.project.v1', 'null'); localStorage.setItem('valleyvis.settings.v1', 'null'); },
+  };
+  for (const [name, init] of Object.entries(cases)) {
+    const ctx = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+    await ctx.addInitScript(`if (!sessionStorage.getItem('seeded')) { sessionStorage.setItem('seeded', '1'); (${init.toString()})(); }`);
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(url);
+    await page.waitForTimeout(500);
+    const alive = await page.evaluate(() => {
+      try {
+        const app = window.valleyVis;
+        if (!app) return 'no app';
+        app.store.derived();
+        return document.querySelectorAll('#tabBody .card').length > 0 ? 'ok' : 'no cards';
+      } catch (e) {
+        return `throws: ${e.message}`;
+      }
+    });
+    check(`corrupt storage (${name}): app still loads`, alive === 'ok' && errors.length === 0, `${alive} ${errors.join(' | ')}`);
+    if (alive === 'ok') {
+      // and stays usable
+      const t = helpers(page);
+      await page.click('button:text-is("+ Path")').catch(() => {});
+      await page.click('#btnExport').catch(() => {});
+      await page.waitForTimeout(100);
+      check(`corrupt storage (${name}): can add a path and export`, errors.length === 0 && (await t.project()).steps.some((s) => s && s.type === 'path'), errors.join(' | '));
+    }
+    await ctx.close();
+  }
+};
+
+tests.presetsAndExport = async (browser, url) => {
+  const page = await newPage(browser, url, { context: { permissions: ['clipboard-read', 'clipboard-write'] } });
+  const t = helpers(page);
+  for (const id of ['up', 'solo', 'down']) {
+    await page.selectOption('#presetSelect', id);
+    await t.settle();
+    for (const al of ['red', 'blue']) {
+      await page.click(`#allianceToggle button[data-alliance="${al}"]`);
+      await t.settle();
+    }
+    await page.click('#btnExport');
+    const code = await page.locator('#exportOverlay pre.code').textContent();
+    check(`preset ${id}: exports a routine()`, /protected Command routine\(\)/.test(code) && /PedroAutoDsl\.auto/.test(code));
+    await page.click('#exportOverlay button:has-text("Copy")');
+    await page.waitForTimeout(80);
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    check(`preset ${id}: Copy puts the code on the clipboard`, clip === code);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#exportOverlay button:has-text("Download")')]);
+    check(`preset ${id}: Download gives a .java file`, dl.suggestedFilename().endsWith('.java'), dl.suggestedFilename());
+    await page.keyboard.press('Escape');
+  }
+  check('presets: undo returns to the previous routine', await (async () => { await page.keyboard.press('Control+z'); return /Solo/.test((await t.project()).name); })());
+  check('presets: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.mobile = async (browser, url) => {
+  const page = await newPage(browser, url, { viewport: { width: 390, height: 844 }, context: { hasTouch: true, isMobile: true } });
+  const t = helpers(page);
+  const w = await t.ev(() => [document.documentElement.scrollWidth, window.innerWidth]);
+  check('mobile: no sideways scroll', w[0] <= w[1] + 1, JSON.stringify(w));
+  const c = await page.locator('#field').boundingBox();
+  check('mobile: field fits the screen', c.width <= 390 && c.width > 250, JSON.stringify(c));
+  await page.locator('[data-step="u3"] .hd').scrollIntoViewIfNeeded();
+  await page.tap('[data-step="u3"] .hd');
+  check('mobile: tapping a step selects it', (await t.ui()).selectedStepId === 'u3');
+  await page.tap('#btnSettings');
+  const m = await page.locator('#settingsOverlay .modal').boundingBox();
+  check('mobile: settings fit the screen', m.width <= 390, JSON.stringify(m));
+  check('mobile: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.performance = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  const ms = await t.ev(() => {
+    const app = window.valleyVis;
+    app.store.update((p) => {
+      p.steps = [];
+      for (let i = 0; i < 40; i++) {
+        p.steps.push({ id: `p${i}`, type: 'path', name: `p${i}`, endName: `e${i}`, segments: [{ type: 'curve', controls: [{ x: 30 + (i * 7) % 90, y: 30 + (i * 13) % 90 }], end: { x: 20 + (i * 17) % 100, y: 20 + (i * 29) % 100 } }], endH: (i * 40) % 360, heading: { mode: 'linear' }, during: [], markers: [] });
+        p.steps.push({ id: `a${i}`, type: 'action', label: '', cmds: [{ lib: 'shoot', params: { timeoutMs: 200 } }], timeout: null });
+      }
+    });
+    const t0 = performance.now();
+    for (let i = 0; i < 10; i++) {
+      app.store.update((p) => { p.steps[0].segments[0].end.x = 20 + i; }, { history: false });
+      app.store.derived();
+    }
+    return (performance.now() - t0) / 10;
+  });
+  check('perf: 80-step routine recomputes in under 50 ms', ms < 50, `${ms.toFixed(1)} ms`);
+  check('perf: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+(async () => {
+  const { server, url } = await startServer(ROOT);
+  const browser = await chromium.launch();
+  for (const [name, fn] of Object.entries(tests)) {
+    if (only && name !== only) continue;
+    const before = results.length;
+    try {
+      await fn(browser, url);
+    } catch (e) {
+      check(`${name}: threw`, false, e.message.split('\n')[0]);
+    }
+    const mine = results.slice(before);
+    console.log(`${mine.every((r) => r.ok) ? 'ok  ' : 'FAIL'} ${name} (${mine.filter((r) => r.ok).length}/${mine.length})`);
+  }
+  await browser.close();
+  server.close();
+  const failed = results.filter((r) => !r.ok);
+  console.log(`\n${results.length - failed.length} passed, ${failed.length} failed`);
+  process.exit(failed.length ? 1 : 0);
+})();

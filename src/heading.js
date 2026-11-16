@@ -11,11 +11,14 @@
 
 import { normAngle, normSigned, TAU } from './geometry.js';
 
+/** Interpolator.linear / longLinear deltas, ported operation for operation from Pedro's Angle helpers. */
 function linearDelta(a, b, long) {
-  const short = normSigned(normAngle(b) - normAngle(a));
-  if (!long) return short;
-  if (short === 0) return TAU;
-  return short > 0 ? short - TAU : short + TAU;
+  const start = normAngle(a);
+  const end = normAngle(b);
+  if (!long) return normSigned(end - start); // Angle.error(start, end)
+  const direction = normAngle(end - start) <= Math.PI ? 1 : -1; // Angle.turnDirection
+  const smallest = Math.min(normAngle(start - end), normAngle(end - start)); // Angle.smallestDifference
+  return -direction * (TAU - smallest);
 }
 
 export function makeInterpolator(desc, geom) {
@@ -74,19 +77,19 @@ export function headingAtCompletion(interp, geom, s) {
 export function validatePiecewise(pieces) {
   const issues = [];
   if (!pieces.length) {
-    issues.push({ level: 'error', msg: 'Piecewise heading needs at least one piece.' });
+    issues.push({ level: 'error', throws: true, msg: 'Piecewise heading needs at least one piece.' });
     return issues;
   }
   let last = 0;
   pieces.forEach((p, idx) => {
     if (!(p.until > last)) {
-      issues.push({ level: 'error', msg: `Piece ${idx + 1}: "until" ${p.until} must be greater than ${last} (Pedro throws IllegalArgumentException).` });
+      issues.push({ level: 'error', throws: true, msg: `Piece ${idx + 1}: "until" ${p.until} must be greater than ${last} (Pedro throws IllegalArgumentException).` });
     }
-    if (p.until > 1) issues.push({ level: 'error', msg: `Piece ${idx + 1}: "until" must be ≤ 1.0.` });
+    if (p.until > 1) issues.push({ level: 'error', throws: true, msg: `Piece ${idx + 1}: "until" must be ≤ 1.0 (Pedro throws IllegalArgumentException).` });
     last = Math.max(last, p.until);
   });
   if (Math.abs(last - 1) > 1e-9) {
-    issues.push({ level: 'error', msg: 'Last piece must end at until = 1.0 (Pedro throws IllegalStateException otherwise).' });
+    issues.push({ level: 'error', throws: true, msg: 'Last piece must end at until = 1.0 (Pedro throws IllegalStateException otherwise).' });
   }
   const quirky = pieces.some((p, idx) => {
     const covers = idx === 0 && p.until >= 1;

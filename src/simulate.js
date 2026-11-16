@@ -19,22 +19,36 @@ function headingVariation(geom, interp, n) {
   return total;
 }
 
-/** Joint speed caps where consecutive segments meet at an angle (sharp corners ~ stop). */
-function jointCaps(geom, vmax) {
-  const caps = [];
+/** Speed factor (0..1) where consecutive segments meet at an angle: sharp corners ~ stop. */
+function jointFactors(geom) {
+  const out = [];
   for (let i = 1; i < geom.segs.length; i++) {
     const s = geom.segs[i].startLen / (geom.length || 1);
     const ta = geom.tangentAt(Math.max(0, s - 1e-4));
     const tb = geom.tangentAt(Math.min(1, s + 1e-4));
-    const turn = Math.abs(normSigned(tb - ta));
-    caps.push({ s, v: vmax * Math.max(0, Math.cos(turn)) });
+    out.push({ s, k: Math.max(0, Math.cos(Math.abs(normSigned(tb - ta)))) });
   }
-  return caps;
+  return out;
+}
+
+/**
+ * Pedro's mecanum top speed for a drive direction `theta` away from the robot's nose
+ * (Mecanum.interpolateVelocity): full forward speed straight ahead, strafe speed sideways,
+ * and slower than either on a diagonal.
+ */
+export function maxAchievableVelocity(motion, theta) {
+  const forward = Math.max(1, motion.maxVelForward ?? motion.maxVel ?? 60);
+  const strafe = Math.max(1, motion.maxVelStrafe ?? motion.maxVel ?? forward);
+  return 1 / (Math.abs(Math.cos(theta)) / forward + Math.abs(Math.sin(theta)) / strafe);
 }
 
 /** Trapezoid-ish velocity profile along the path. Returns times[i] at completion s[i]. */
 export function profilePath(geom, interp, motion, speedScale = 1) {
-  const vmax = Math.max(1, motion.maxVel * (speedScale || 1));
+  // follow(path, maxSpeed) caps at maxSpeed * max achievable velocity; above 1 it changes nothing
+  const scale = Math.min(1, Math.max(0.01, speedScale || 1));
+  const accel = Math.max(1, motion.accel);
+  const decel = Math.max(1, motion.decel);
+  const lateral = Math.max(1, motion.lateralAccel);
   const L = geom.length;
   const turnRate = deg2rad(Math.max(1, motion.turnRate));
   if (L < 1e-6) {
@@ -48,17 +62,19 @@ export function profilePath(geom, interp, motion, speedScale = 1) {
   const v = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     s[i] = i / (n - 1);
+    const theta = geom.tangentAt(s[i]) - interp(geom.paramOfCompletion(s[i]));
+    const top = maxAchievableVelocity(motion, theta) * scale;
     const k = geom.curvatureAt(s[i]);
-    v[i] = k > 1e-6 ? Math.min(vmax, Math.sqrt(motion.lateralAccel / k)) : vmax;
+    v[i] = k > 1e-6 ? Math.min(top, Math.sqrt(lateral / k)) : top;
   }
-  for (const cap of jointCaps(geom, vmax)) {
-    const i = Math.round(cap.s * (n - 1));
-    v[i] = Math.min(v[i], cap.v);
+  for (const joint of jointFactors(geom)) {
+    const i = Math.round(joint.s * (n - 1));
+    v[i] = Math.min(v[i], v[i] * joint.k);
   }
   v[0] = 0;
   v[n - 1] = 0;
-  for (let i = 1; i < n; i++) v[i] = Math.min(v[i], Math.sqrt(v[i - 1] ** 2 + 2 * motion.accel * ds));
-  for (let i = n - 2; i >= 0; i--) v[i] = Math.min(v[i], Math.sqrt(v[i + 1] ** 2 + 2 * motion.decel * ds));
+  for (let i = 1; i < n; i++) v[i] = Math.min(v[i], Math.sqrt(v[i - 1] ** 2 + 2 * accel * ds));
+  for (let i = n - 2; i >= 0; i--) v[i] = Math.min(v[i], Math.sqrt(v[i + 1] ** 2 + 2 * decel * ds));
   const times = new Float64Array(n);
   for (let i = 1; i < n; i++) {
     const avg = (v[i] + v[i - 1]) / 2;
@@ -70,7 +86,7 @@ export function profilePath(geom, interp, motion, speedScale = 1) {
     const k = minTurn / times[n - 1];
     for (let i = 0; i < n; i++) times[i] *= k;
   }
-  return { duration: times[n - 1], s, times };
+  return { duration: times[n - 1], s, times, v };
 }
 
 function searchSorted(arr, x) {
@@ -119,7 +135,10 @@ function pathItem(step, pose, t0, settings) {
   const endPt = step.geom.pointAt(endS);
   const endPose = { x: endPt.x, y: endPt.y, h: step.interp(step.geom.paramOfCompletion(endS)) };
   const spans = [];
-  for (const c of step.during) spans.push({ name: c.name, color: c.color, t0, t1, kind: 'during' });
+  for (const c of step.during) {
+    // DeadlineCommand: a command that finishes early just ends; the rest are cut when the follow ends
+    spans.push({ name: c.name, color: c.color, t0, t1: Number.isFinite(c.duration) ? Math.min(t1, t0 + c.duration) : t1, kind: 'during' });
+  }
   for (const m of step.markers) {
     const tm = t0 + timeAtCompletion(prof, m.at);
     if (tm >= t1) continue;
@@ -143,8 +162,10 @@ function turnItem(step, pose, t0, settings) {
 }
 
 function actionItem(step, pose, t0) {
+  // Commands.parallel ends when every command has ended; withTimeout ends at whichever comes first
   const durations = step.cmds.map((c) => c.duration);
-  let dur = step.timeout ?? (durations.length ? Math.max(...durations) : 0);
+  const natural = durations.length ? Math.max(...durations) : 0;
+  let dur = step.timeout === null || step.timeout === undefined ? natural : Math.min(natural, Math.max(0, step.timeout));
   const forever = !Number.isFinite(dur);
   if (forever) dur = 0;
   const t1 = t0 + dur;

@@ -2,7 +2,7 @@
 // field frame of the previewed alliance. Mirrors what PoseFactory f = field() does in Java.
 
 import { evalValue } from './expr.js';
-import { buildPath, deg2rad, normAngle } from './geometry.js';
+import { bezierDerivative, buildPath, deg2rad, normAngle } from './geometry.js';
 import { makeInterpolator, validatePiecewise } from './heading.js';
 
 export function symbolTable(settings) {
@@ -100,6 +100,65 @@ export function headingDescriptor(heading, ctx) {
   }
 }
 
+const samePoint = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) < 1e-9;
+
+function isTangent(d) {
+  return d && d.k === 'tangent';
+}
+
+/**
+ * Shapes Pedro 3.0.1 cannot follow. Checked against the real library (see README, "Backtest"):
+ * `throws: true` always throws, `throws: 'maybe'` throws depending on floating-point rounding.
+ */
+function degenerateCurveIssues(segPts, geom, desc, stepId) {
+  const issues = [];
+  const multi = segPts.length > 1;
+  const lastPiece = desc.k === 'piecewise' ? desc.pieces[desc.pieces.length - 1]?.i : null;
+  const tangentAtEnd = isTangent(desc) || isTangent(lastPiece);
+  const tangentAnywhere = isTangent(desc) || (desc.k === 'piecewise' && desc.pieces.some((pc) => isTangent(pc.i)));
+  segPts.forEach((pts, i) => {
+    const n = i + 1;
+    const isLine = pts.length <= 2;
+    if (geom.segs[i].length < 1e-9) {
+      issues.push({
+        level: 'error',
+        stepId,
+        throws: true,
+        msg: isLine
+          ? `Segment ${n} is a line that starts and ends at the same point (Pedro throws "Line cannot have zero length").`
+          : `Segment ${n} has zero length: every point of the curve is in the same place (Pedro throws "Cannot normalize 0 vector").`,
+      });
+      return;
+    }
+    if (isLine) return;
+    if (samePoint(pts[0], pts[1])) {
+      issues.push({ level: 'error', stepId, throws: true, msg: `Segment ${n}: the first control point sits exactly on the start of the curve, so the curve has no direction there. Pedro throws "Cannot normalize 0 vector" as the robot starts it. Move the control point off the start.` });
+    }
+    if (samePoint(pts[pts.length - 1], pts[pts.length - 2])) {
+      if (!tangentAnywhere) {
+        issues.push({ level: 'warn', stepId, msg: `Segment ${n}: the last control point sits exactly on the end of the curve. It works with this heading, but a tangent heading there would make Pedro throw.` });
+      } else if (!multi && tangentAtEnd) {
+        issues.push({ level: 'error', stepId, throws: true, msg: `Segment ${n}: the last control point sits exactly on the end of the curve, so the tangent heading has no direction there. Pedro throws "Cannot normalize 0 vector". Move the control point off the end.` });
+      } else {
+        issues.push({ level: 'error', stepId, throws: 'maybe', msg: `Segment ${n}: the last control point sits exactly on the end of the curve, where a tangent heading has no direction. Pedro can throw "Cannot normalize 0 vector" here. Move the control point off the end.` });
+      }
+    }
+    // a curve that stops and doubles back (zero speed somewhere in the middle)
+    let slowest = Infinity;
+    let at = 0;
+    for (let k = 1; k < 40; k++) {
+      const u = k / 40;
+      const d = bezierDerivative(pts, u);
+      const m = Math.hypot(d.x, d.y);
+      if (m < slowest) { slowest = m; at = u; }
+    }
+    if (slowest < geom.segs[i].length * 1e-3) {
+      issues.push({ level: 'warn', stepId, msg: `Segment ${n} doubles back on itself about ${Math.round(at * 100)}% of the way along (a cusp). The robot has to stop and reverse there; split it into two paths instead.` });
+    }
+  });
+  return issues;
+}
+
 function resolvePath(step, ctx) {
   const { ev, frame } = ctx;
   const segs = step.segments || [];
@@ -115,6 +174,8 @@ function resolvePath(step, ctx) {
   const endRaw = segs.length ? segs[segs.length - 1].end : { x: ctx.pose.x, y: ctx.pose.y };
   const endPose = frame.pose(ev(endRaw.x, 'End x', step.id), ev(endRaw.y, 'End y', step.id), ev(step.endH ?? 0, 'End heading', step.id));
   const start = { ...ctx.pose };
+  const maxSpeedRaw = step.maxSpeed === null || step.maxSpeed === undefined || step.maxSpeed === '' ? null : ev(step.maxSpeed, 'Max speed', step.id);
+  const maxSpeed = maxSpeedRaw !== null && maxSpeedRaw > 0 ? maxSpeedRaw : null;
   const geom = buildPath(segPts.length ? segPts : [[start, start]]);
   const hctx = { ...ctx, start, end: endPose, stepId: step.id };
   const desc = headingDescriptor(step.heading, hctx);
@@ -123,11 +184,10 @@ function resolvePath(step, ctx) {
     for (const iss of validatePiecewise(desc.pieces)) issues.push({ ...iss, stepId: step.id });
   }
   if (!segs.length) issues.push({ level: 'error', stepId: step.id, msg: 'Path has no segments.' });
-  geom.segs.forEach((sg, i) => {
-    if (sg.length < 1e-6) {
-      issues.push({ level: 'error', stepId: step.id, msg: `Segment ${i + 1} has zero length (Pedro throws "Line cannot have zero length").` });
-    }
-  });
+  issues.push(...degenerateCurveIssues(segPts, geom, desc, step.id));
+  if (maxSpeedRaw !== null && !(maxSpeedRaw > 0)) {
+    issues.push({ level: 'error', stepId: step.id, throws: true, msg: 'Max speed must be greater than 0 (ValleyLib throws IllegalArgumentException). Leave it blank for full speed.' });
+  }
   let interp;
   try {
     interp = makeInterpolator(desc, geom);
@@ -135,7 +195,7 @@ function resolvePath(step, ctx) {
     interp = () => start.h;
     issues.push({ level: 'error', stepId: step.id, msg: e.message });
   }
-  const maxSpeed = step.maxSpeed === null || step.maxSpeed === undefined || step.maxSpeed === '' ? null : ev(step.maxSpeed, 'Max speed', step.id);
+
   const timeout = step.timeout === null || step.timeout === undefined || step.timeout === '' ? null : ev(step.timeout, 'Timeout', step.id);
   const during = (step.during || []).map((r) => resolveCommand(r, ctx.settings, ev, step.id));
   const markers = (step.markers || []).map((m) => ({ id: m.id, at: Math.min(Math.max(Number(m.at) || 0, 0), 1), cmd: resolveCommand(m.cmd, ctx.settings, ev, step.id) }));

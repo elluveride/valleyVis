@@ -107,7 +107,7 @@ test('red frame is the AutoPaths.RED point mirror', () => {
 test('velocity profile respects distance, accel and speed limits', () => {
   const g = buildPath([[{ x: 0, y: 0 }, { x: 100, y: 0 }]]);
   const interp = makeInterpolator({ k: 'constant', h: 0 }, g);
-  const motion = { maxVel: 50, accel: 50, decel: 50, lateralAccel: 50, turnRate: 180 };
+  const motion = { maxVelForward: 50, maxVelStrafe: 50, accel: 50, decel: 50, lateralAccel: 50, turnRate: 180 };
   const prof = profilePath(g, interp, motion, 1);
   // 1 s up to 50 in/s (25 in), 50 in cruise (1 s), 1 s down (25 in) => 3 s
   near(prof.duration, 3, 0.02);

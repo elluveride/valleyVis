@@ -58,7 +58,8 @@ export function createContext(project, settings, resolvedBlue) {
     imports: new Set(),
     warnings: [],
     usesMarkers: false,
-    name: makeNames(['f', 'b', 'subsystems', 'reached', 'start']),
+    usesJointSafe: false,
+    name: makeNames(['f', 'b', 'subsystems', 'reached', 'jointSafe', 'start']),
   };
 }
 
@@ -131,6 +132,11 @@ function piecewiseSuffix(pieces, pathCtx, ctx, pad) {
   useImport(ctx, 'com.pedropathing.paths.interpolator.Interpolator');
   const inner = `${pad}        `;
   const lines = pieces.map((p) => `\n${inner}.until(${fmtNum(Number(p.until))}, ${pieceInterp(p, pathCtx, ctx)})`).join('');
+  if (pathCtx.multiSegment) {
+    // Pedro 3.0.1 throws on ~1 in 9 multi-segment paths with a piecewise heading (rounding at the joints)
+    ctx.usesJointSafe = true;
+    return `\n${pad}.heading(jointSafe(Interpolator.piecewise()${lines}))`;
+  }
   return `\n${pad}.heading(Interpolator.piecewise()${lines})`;
 }
 
@@ -155,7 +161,13 @@ export function headingSuffix(heading, pathCtx, ctx, pad) {
         useImport(ctx, 'com.pedropathing.paths.interpolator.Interpolator');
         return `\n${pad}.heading(Interpolator.longLinear(${s}, ${e}))`;
       }
-      if (endT < 1 && endT > 0) return `\n${pad}.linear(${s}, ${e}, ${fmtNum(endT)})`;
+      if (endT < 1 && endT > 0) {
+        if (pathCtx.multiSegment) {
+          // Path.linear(start, end, endT) builds a piecewise internally, so it needs the same guard
+          return piecewiseSuffix([{ until: endT, mode: 'linear', from: 'start', to: 'end' }, { until: 1, mode: 'constant', hold: 'end' }], pathCtx, ctx, pad);
+        }
+        return `\n${pad}.linear(${s}, ${e}, ${fmtNum(endT)})`;
+      }
       return `\n${pad}.linear(${s}, ${e})`;
     }
   }
@@ -218,7 +230,7 @@ function genPath(step, ctx, state) {
   const body = segExprs.length === 1
     ? segExprs[0]
     : `Paths.path(${segExprs.map((e) => `\n${cont}    ${e}`).join(',')})`;
-  const pathCtx = { startVar, endVar, endX: last.end.x, endY: last.end.y };
+  const pathCtx = { startVar, endVar, endX: last.end.x, endY: last.end.y, multiSegment: segs.length > 1, name: pathName };
   const suffix = headingSuffix(step.heading, pathCtx, ctx, cont);
   state.paths.push(`Path ${pathName} = ${body}${suffix};`);
 
@@ -298,8 +310,39 @@ function reachedHelper(ctx) {
   ].join('\n');
 }
 
+function jointSafeHelper(ctx) {
+  useImport(ctx, 'com.pedropathing.paths.interpolator.Interpolator');
+  return [
+    '    /**',
+    '     * Pedro 3.0.1 can throw when a piecewise heading sits on a multi-segment path: rounding at',
+    '     * the segment joints makes it look up the wrong piece. Evaluating a hair earlier avoids it.',
+    '     */',
+    '    private static Interpolator jointSafe(Interpolator heading) {',
+    '        return (curve, t) -> heading.interpolate(curve, Math.max(0.0, t - 1e-9));',
+    '    }',
+  ].join('\n');
+}
+
 function padLines(text, pad) {
   return text.split('\n').map((l) => (l ? pad + l : l)).join('\n');
+}
+
+/** Simple class name -> import, for every class the export or the command library knows about. */
+function knownClasses(settings) {
+  const fq = [
+    'com.pedropathing.api.Paths', 'com.pedropathing.api.PoseFactory', 'com.pedropathing.math.Pose',
+    'com.pedropathing.paths.Path', 'com.pedropathing.paths.interpolator.Interpolator', 'com.pedropathing.follower.Follower',
+    'com.vcs.valleylib.core.command.Command', 'com.vcs.valleylib.core.command.Commands', 'com.vcs.valleylib.ftc.pedro.PedroAutoDsl',
+    settings.code.constantsImport,
+    ...splitList(settings.code.turnImports),
+    ...(settings.commands || []).flatMap((c) => splitList(c.imports)),
+  ];
+  const out = {};
+  for (const name of fq) {
+    const simple = String(name || '').split('.').pop();
+    if (/^[A-Z]\w*$/.test(simple) && !(simple in out)) out[simple] = name;
+  }
+  return out;
 }
 
 /** Body pieces shared by every export flavour. */
@@ -332,9 +375,14 @@ export function generateBody(project, settings, resolvedBlue) {
     '    }',
   ].join('\n');
 
-  const helper = ctx.usesMarkers ? reachedHelper(ctx) : null;
+  const helpers = [ctx.usesMarkers ? reachedHelper(ctx) : null, ctx.usesJointSafe ? jointSafeHelper(ctx) : null].filter(Boolean);
+  const helper = helpers.length ? helpers.join('\n\n') : null;
+  if (ctx.usesJointSafe) ctx.warnings.push('Multi-segment paths with a piecewise heading are wrapped in jointSafe(): Pedro 3.0.1 throws on about 1 in 9 of them otherwise. Keep the helper when you paste.');
   const all = [startingPose, routine, helper].filter(Boolean).join('\n');
-  if (all.includes('Constants.')) useImport(ctx, settings.code.constantsImport);
+  // hand-written Java steps and command templates can mention classes nothing else imported
+  for (const [simple, fqcn] of Object.entries(knownClasses(settings))) {
+    if (new RegExp(`(^|[^\\w.])${simple}\\b`).test(all)) useImport(ctx, fqcn);
+  }
   return { startingPose, routine, helper, imports: [...ctx.imports].sort(), warnings: ctx.warnings };
 }
 

@@ -2,9 +2,10 @@
 // results (resolved geometry, timeline, collisions) recomputed only when inputs change.
 
 import { checkCollisions } from './collision.js';
-import { cloneDeep, DEFAULT_SETTINGS, emptyProject, mergeDefaults } from './defaults.js';
+import { cloneDeep, DEFAULT_SETTINGS, emptyProject } from './defaults.js';
 import { lintProject } from './lint.js';
 import { resolveProject } from './resolve.js';
+import { normalizeProject, normalizeSettings } from './schema.js';
 import { simulate } from './simulate.js';
 import { debounce, safeStorage } from './util.js';
 
@@ -15,14 +16,20 @@ const HISTORY_MAX = 200;
 
 export function createStore() {
   const storage = safeStorage();
-  const savedUi = storage.get(UI_KEY) || {};
+  const rawUi = storage.get(UI_KEY);
+  const savedUi = rawUi && typeof rawUi === 'object' && !Array.isArray(rawUi) ? rawUi : {};
+  const savedProject = storage.get(PROJECT_KEY);
   const state = {
-    project: storage.get(PROJECT_KEY) || emptyProject(),
-    settings: mergeDefaults(storage.get(SETTINGS_KEY)),
+    project: savedProject ? normalizeProject(savedProject) : emptyProject(),
+    settings: normalizeSettings(storage.get(SETTINGS_KEY)),
     ui: {
       alliance: savedUi.alliance === 'red' ? 'red' : 'blue',
-      tab: savedUi.tab || 'routine',
-      view: { footprints: false, park: true, labels: true, ...(savedUi.view || {}) },
+      tab: ['routine', 'zones', 'problems'].includes(savedUi.tab) ? savedUi.tab : 'routine',
+      view: {
+        footprints: savedUi.view?.footprints === true,
+        park: savedUi.view?.park !== false,
+        labels: savedUi.view?.labels !== false,
+      },
       selectedStepId: null,
       selectedZoneId: null,
       tool: 'select',
@@ -85,7 +92,7 @@ export function createStore() {
     },
     replaceProject(project, opts = {}) {
       const before = snapshot();
-      state.project = project;
+      state.project = normalizeProject(project);
       rev += 1;
       if (opts.history !== false) pushUndo(before);
       state.ui.selectedStepId = null;
@@ -99,6 +106,13 @@ export function createStore() {
       rev += 1;
       persistSettings();
       emit('settings', opts);
+    },
+    /** Replace all settings (import); anything malformed falls back to defaults. */
+    replaceSettings(raw) {
+      state.settings = normalizeSettings(raw);
+      rev += 1;
+      persistSettings();
+      emit('settings', {});
     },
     resetSettings() {
       state.settings = cloneDeep(DEFAULT_SETTINGS);

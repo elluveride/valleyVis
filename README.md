@@ -51,9 +51,36 @@ The bundled image is drawn with Pedro **+x up** and **+y left**, with the origin
 
 ## How faithful is the preview?
 
-- **Geometry and headings match Pedro 3.0.1 exactly.** That includes Pedro's adaptive arc-length table, how `CompoundCurve` splits `t` by segment length, and how `PiecewiseInterpolator` re-scales `t` per piece. `tests/pedro-parity.test.js` checks against output from the real library (`tests/fixtures/Compare.java`): within 0.003° and 0.0001 in.
-- **Timing is an estimate.** It uses a trapezoid profile with a curvature speed cap, and it is not Foresight's controller. Tune *Settings → Motion* against a stopwatch.
+- **Geometry and headings match Pedro 3.0.1 exactly.** That includes Pedro's adaptive arc-length table, how `CompoundCurve` splits `t` by segment length, how `PiecewiseInterpolator` re-scales `t` per piece, and which way `longLinear` turns at the tie cases. Two test files compare against output from the real library: the team's own paths (`tests/pedro-parity.test.js`) and 255 random paths with random headings (`tests/pedro-fuzz.test.js`). Positions, completions and headings agree to 1e-6.
+- **Timing is an estimate.** It uses a trapezoid profile with a curvature speed cap, and it is not Foresight's controller. Top speed does follow Pedro's mecanum model (fast nose-first, slower strafing, slowest on diagonals). Tune *Settings → Motion* against a stopwatch.
+- **Command timing follows ValleyLib's rules.** A timeout ends a step at whichever comes first, a parallel group waits for its slowest command, and commands running during a path are cut when the path ends.
 - **Timeouts are simulated** like `AutoBase`: the routine is cut at 20 s, then `AutoPaths.routeToPark` runs for up to 9.75 s.
+
+## Things Pedro 3.0.1 does that the tool handles for you
+
+These were found by running exported code against the real library (see *Backtest* below).
+
+| Pedro behaviour | What ValleyVis does |
+| --- | --- |
+| A piecewise heading on a multi-segment path throws (`NullPointerException` or `IllegalArgumentException`) on about 1 path in 9, because of rounding at the segment joints. | The export wraps those headings in a small `jointSafe(...)` helper. 0 of 100,000 random paths throw with it. |
+| A control point exactly on the start of its curve makes the follower throw `Cannot normalize 0 vector`. The same happens on the end with a tangent heading. | Reported as an error in the Problems tab. |
+| A zero-length line, a piecewise heading whose pieces are out of order or stop short of 1.0, or a speed cap of 0 all throw. | Reported as errors. |
+| `follower.completion()` mixes up segment and whole-path progress on multi-segment paths. | Markers use `pathIndex()` and `remainingDistance()` instead. |
+| A `tangent` or `facingPoint` piece inside a piecewise heading is evaluated at a re-scaled `t`. | The preview shows what the robot will really do, with a warning. |
+
+## Backtest
+
+`tests/backtest/run.sh` checks the exporter against the real libraries. It:
+
+1. generates random routines that use every feature, plus shapes Pedro rejects;
+2. exports them and compiles the Java against the Pedro Pathing 3.0.1 and ValleyLib 2.0.0 sources (with small stand-ins for the FTC SDK and the team classes);
+3. builds every routine for both alliances the way the follower would, and compares what happened with what the Problems tab predicted.
+
+The last full run covered 1,000 routines (2,000 builds): every "this will throw" and "this is fine" prediction matched. It needs a JDK, Node, Python 3, git, curl and unzip:
+
+```bash
+tests/backtest/run.sh
+```
 
 ## Development
 
@@ -63,11 +90,18 @@ npm test
 
 This runs the node:test suites in `tests/` and needs no dependencies.
 
+```bash
+npm run e2e
+```
+
+This drives the real app in headless Chromium (every drag, tool, dialog and shortcut). It needs Playwright (`npm i -D playwright`, then `npx playwright install chromium`).
+
 Code map (`src/`):
 - `expr.js`: coordinate expressions → numbers / Java
 - `geometry.js`: Bézier/line maths that mirror Pedro's `Curve`s
 - `heading.js`: Pedro `Interpolator` semantics
-- `resolve.js`: project → numeric model for an alliance
+- `resolve.js`: project → numeric model for an alliance, plus the "Pedro will throw" checks
+- `schema.js`: repairs anything loaded from storage or files
 - `simulate.js`: timeline, velocity profile, park route
 - `collision.js`: footprint vs zones / walls
 - `codegen.js`: Java export

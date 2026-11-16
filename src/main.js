@@ -7,6 +7,7 @@ import { attachInteractions, hoverText } from './interact.js';
 import { PRESETS } from './presets.js';
 import { makeView, render } from './render.js';
 import { symbolTable } from './resolve.js';
+import { looksLikeProject } from './schema.js';
 import { createStore } from './store.js';
 import { createExportDialog } from './ui/export.js';
 import { preserveFocus } from './ui/fields.js';
@@ -206,10 +207,9 @@ fileInput.addEventListener('change', async () => {
   try {
     const parsed = JSON.parse(await f.text());
     const project = parsed.kind === 'valleyvis-project' ? parsed.project : parsed;
-    if (!project || !Array.isArray(project.steps) || !project.start) throw new Error('not a ValleyVis routine');
-    project.zones = project.zones || [];
+    if (!looksLikeProject(project)) throw new Error('not a ValleyVis routine');
     store.replaceProject(project);
-    toast(`Opened "${project.name}"`);
+    toast(`Opened "${store.state.project.name}"`);
   } catch (e) {
     toast(`Could not open: ${e.message}`);
   }

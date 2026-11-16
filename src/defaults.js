@@ -85,7 +85,10 @@ export const DEFAULT_SETTINGS = {
     widthJava: 'Constants.ROBOT_WIDTH',
   },
   motion: {
-    maxVel: 58, // in/s; PedroConstants: forward 74.45, strafe 58.21
+    // PedroConstants: maxAchievableForwardVelocity / maxAchievableStrafeVelocity (in/s).
+    // Pedro's mecanum model blends them by drive direction: 1 / (|cos|/forward + |sin|/strafe).
+    maxVelForward: 74.45,
+    maxVelStrafe: 58.21,
     accel: 60, // in/s^2
     decel: 45, // in/s^2
     lateralAccel: 70, // in/s^2, caps speed through curves (v <= sqrt(a/curvature))
@@ -96,6 +99,7 @@ export const DEFAULT_SETTINGS = {
     routineTimeout: 20, // AutoBase: routine().withTimeout(20.0)
     parkTimeout: 9.75, // AutoBase: GoToCmd(routeToPark).withTimeout(9.75)
     autoLength: 30,
+    enforceTimeout: true, // cut the routine at routineTimeout during playback, like AutoBase
     showPark: true,
     wallTolerance: 0.5, // in the robot may poke past a wall before it's flagged
   },
@@ -162,18 +166,4 @@ export function emptyProject() {
 
 export function cloneDeep(v) {
   return JSON.parse(JSON.stringify(v));
-}
-
-/** Fill missing keys from defaults (for settings saved by older versions). */
-export function mergeDefaults(saved, defaults = DEFAULT_SETTINGS) {
-  if (saved === null || typeof saved !== 'object' || Array.isArray(saved)) return cloneDeep(defaults);
-  const out = cloneDeep(defaults);
-  for (const [k, v] of Object.entries(saved)) {
-    if (v && typeof v === 'object' && !Array.isArray(v) && defaults[k] && typeof defaults[k] === 'object' && !Array.isArray(defaults[k])) {
-      out[k] = { ...out[k], ...v };
-    } else {
-      out[k] = v;
-    }
-  }
-  return out;
 }
