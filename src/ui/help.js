@@ -12,6 +12,7 @@ const SECTIONS = [
     ['Right-click ■ or ◆', 'Remove that control point or marker'],
     ['Hold Shift while dragging', 'No snapping: 0.01 in and 0.1° steps'],
     ['Click empty field', 'Deselect'],
+    ['Ruler button, then drag', 'Measure a distance and direction'],
   ]],
   ['Keyboard', [
     ['Space', 'Play / pause'],

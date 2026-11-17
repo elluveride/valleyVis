@@ -12,6 +12,7 @@ const TOOLS = [
 ];
 
 export function toolHint(tool) {
+  if (tool === 'measure') return 'Ruler: drag between two spots to measure. Esc puts it away.';
   const t = TOOLS.find((x) => x[0] === tool);
   return tool === 'select' ? '' : t?.[2] || '';
 }

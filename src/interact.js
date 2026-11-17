@@ -240,7 +240,7 @@ export function attachInteractions(canvas, app) {
         if (first && draft.pts.length >= 3 && Math.hypot(first.x - p.x, first.y - p.y) < 10) finishDraft(e);
         else draft.pts.push(real);
       } else {
-        draft = { kind: tool, a: real, b: real };
+        draft = { kind: tool, a: real, b: real, dragging: true };
         canvas.setPointerCapture(e.pointerId);
       }
       app.requestRender();
@@ -267,7 +267,7 @@ export function attachInteractions(canvas, app) {
     const p = local(e);
     const real = realAt(p);
     app.setHover(real);
-    if (draft && (draft.kind === 'rect' || draft.kind === 'circle') && draft.a) {
+    if (draft && (draft.kind === 'rect' || draft.kind === 'circle' || (draft.kind === 'measure' && draft.dragging)) && draft.a) {
       draft.b = real;
       app.requestRender();
       return;
@@ -290,6 +290,11 @@ export function attachInteractions(canvas, app) {
   });
 
   const endDrag = (e) => {
+    if (draft && draft.kind === 'measure') {
+      draft.dragging = false; // the ruler stays on screen until the next drag or Esc
+      app.requestRender();
+      return;
+    }
     if (draft && (draft.kind === 'rect' || draft.kind === 'circle')) {
       finishDraft(e);
       return;

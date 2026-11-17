@@ -418,8 +418,36 @@ function drawPoints(ctx, view, points, labels) {
   });
 }
 
-function drawDraft(ctx, view, draft) {
+/** Ruler: distance, blue-frame deltas and direction between two field points. */
+function drawMeasure(ctx, view, draft, frame) {
+  const a = view.toScreen(draft.a);
+  const b = view.toScreen(draft.b);
+  ctx.save();
+  ctx.strokeStyle = '#f0abfc';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(a.x, a.y);
+  ctx.lineTo(b.x, b.y);
+  ctx.stroke();
+  ctx.restore();
+  handle(ctx, a, 'circle', '#f0abfc', 4);
+  handle(ctx, b, 'circle', '#f0abfc', 4);
+  const da = frame.point(draft.a.x, draft.a.y);
+  const db = frame.point(draft.b.x, draft.b.y);
+  const dx = db.x - da.x;
+  const dy = db.y - da.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 0.05) return;
+  const deg = Math.round((Math.atan2(dy, dx) * 180) / Math.PI);
+  drawLabel(ctx, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, `${dist.toFixed(1)} in   Δx ${dx.toFixed(1)}  Δy ${dy.toFixed(1)}   ${deg}°`, '#f5d0fe');
+}
+
+function drawDraft(ctx, view, draft, frame) {
   if (!draft) return;
+  if (draft.kind === 'measure') {
+    if (draft.a && draft.b) drawMeasure(ctx, view, draft, frame);
+    return;
+  }
   ctx.save();
   ctx.setLineDash([5, 4]);
   ctx.strokeStyle = '#fde047';
@@ -509,7 +537,7 @@ export function render(ctx, view, store, images, extra = {}) {
   // robot at playback time
   const pose = d.sim.poseAt(playback.time);
   drawRobot(ctx, view, pose, settings, { stroke: '#ffffff', fill: `${allianceColor}66`, width: 2, nose: true });
-  drawDraft(ctx, view, extra.draft);
+  drawDraft(ctx, view, extra.draft, d.resolved.frame);
   ctx.restore();
   return { handles, pathPolys };
 }

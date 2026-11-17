@@ -305,7 +305,11 @@ const viewToggles = $('viewToggles');
 function renderViewToggles() {
   const v = store.state.ui.view;
   const items = [['footprints', 'Footprints'], ['park', 'Park route'], ['labels', 'Labels']];
-  viewToggles.replaceChildren(...items.map(([k, label]) => h(`button${v[k] ? '.on' : ''}`, { text: label, onclick: () => store.setUi({ view: { ...v, [k]: !v[k] } }) })));
+  const measuring = store.state.ui.tool === 'measure';
+  viewToggles.replaceChildren(
+    h(`button${measuring ? '.on' : ''}`, { text: 'Ruler', title: 'Measure a distance on the field', 'data-view': 'ruler', onclick: () => { interactions.cancelDraft(); store.setUi({ tool: measuring ? 'select' : 'measure' }); } }),
+    ...items.map(([k, label]) => h(`button${v[k] ? '.on' : ''}`, { text: label, 'data-view': k, onclick: () => store.setUi({ view: { ...v, [k]: !v[k] } }) })),
+  );
 }
 
 function syncHeader() {
@@ -355,6 +359,16 @@ renderSidebar();
 timeline.rebuild();
 syncHeader();
 resize();
+
+/** Current ruler reading in the blue frame, or null. */
+app.measure = () => {
+  const d = interactions.getDraft();
+  if (!d || d.kind !== 'measure' || !d.a || !d.b) return null;
+  const fr = store.derived().resolved.frame;
+  const a = fr.point(d.a.x, d.a.y);
+  const b = fr.point(d.b.x, d.b.y);
+  return { dist: Math.hypot(b.x - a.x, b.y - a.y), dx: b.x - a.x, dy: b.y - a.y };
+};
 
 importFromHash();
 

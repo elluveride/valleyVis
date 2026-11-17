@@ -133,6 +133,7 @@ export const DEFAULT_SETTINGS = {
   points: DEFAULT_POINTS,
   code: {
     routinePackage: `${TEAM}.autos.routines`,
+    geometryPackage: `${TEAM}.autos.geometries`,
     bluePackage: `${TEAM}.autos.blue`,
     redPackage: `${TEAM}.autos.red`,
     baseClass: 'AutoBase',

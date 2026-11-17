@@ -632,7 +632,7 @@ tests.steps = async (browser, url) => {
   check('steps: clearing max speed stores null', (await t.project()).steps.find((s) => s.id === firstId).maxSpeed === null);
   // export still works for this mix
   await page.click('#btnExport');
-  for (const tab of ['Routine class', 'Blue OpMode', 'Red OpMode', 'Paste-in methods']) {
+  for (const tab of ['Routine class', 'Geometry class', 'Routine (uses Geometry)', 'Blue OpMode', 'Red OpMode', 'Paste-in methods']) {
     await page.click(`#exportOverlay .code-tabs button:has-text("${tab}")`);
     const code = await page.locator('#exportOverlay pre.code').textContent();
     check(`steps: export tab "${tab}" has code`, code.length > 100);
@@ -840,6 +840,24 @@ tests.offline = async (browser) => {
   }
   check('offline: no page errors', errors.length === 0, errors.join(' | '));
   await ctx.close();
+};
+
+tests.ruler = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  const before = JSON.stringify(await t.project());
+  await page.click('#viewToggles [data-view="ruler"]');
+  check('ruler: the button switches the tool on', (await t.ui()).tool === 'measure');
+  await t.drag(await t.at(24, 24), await t.at(54, 64));
+  const m = await t.ev(() => { const r = document.getElementById('field').getBoundingClientRect(); void r; return window.valleyVis.measure(); });
+  check('ruler: measures the dragged distance', m && near(m.dist, 50, 0.6) && near(m.dx, 30, 0.6) && near(m.dy, 40, 0.6), JSON.stringify(m));
+  check('ruler: measuring changes nothing in the routine', JSON.stringify(await t.project()) === before);
+  await page.locator('#field').focus();
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  check('ruler: Esc puts it away', (await t.ui()).tool === 'select' && (await t.ev(() => window.valleyVis.measure())) === null);
+  check('ruler: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
 };
 
 tests.keyboardTimeline = async (browser, url) => {

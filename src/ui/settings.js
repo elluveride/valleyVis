@@ -208,6 +208,7 @@ export function createSettingsPage(overlay, app) {
       h('p.hint', { text: 'Where the generated classes go and the names they use. Defaults match Team2844_Season2026/team2844simple.' }),
       h('div.form-grid', {}, [
         t('rp', 'Routine package', 'routinePackage'),
+        t('gp', 'Geometry package', 'geometryPackage'),
         t('bp', 'Blue OpMode package', 'bluePackage'),
         t('redp', 'Red OpMode package', 'redPackage'),
         t('bc', 'Base class', 'baseClass'),

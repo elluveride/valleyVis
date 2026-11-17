@@ -34,7 +34,7 @@ find "$HERE/stubs" "$WORK/gen" "$WORK/pedro/com" \
   "$WORK/valleyLib/valleyLib-ftc/src/main/java/com/vcs/valleylib/ftc/hardware/FtcSubsystem.java" \
   -name '*.java' > "$WORK/files.txt"
 javac -nowarn -d "$WORK/out" @"$WORK/files.txt"
-echo "compiled $(grep -c "$WORK/gen" "$WORK/files.txt") generated files against Pedro 3.0.1 + ValleyLib 2.0.0"
+echo "compiled $(grep -c "$WORK/gen" "$WORK/files.txt") generated files (both export layouts) against Pedro 3.0.1 + ValleyLib 2.0.0"
 
 java -cp "$WORK/out" runner.RunAll "$N" > "$WORK/java.txt"
 python3 "$HERE/compare.py" "$WORK"

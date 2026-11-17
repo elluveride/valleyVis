@@ -92,3 +92,46 @@ test('duplicate names get unique Java identifiers', () => {
   assert.match(m, /Path go = /);
   assert.match(m, /Path go2 = Paths\.line\(spot, spot2\)/);
 });
+
+test('team layout: a Geometry class of static poses and paths, and a routine that follows them', () => {
+  const up = gen(PRESETS.find((p) => p.id === 'up').make());
+  assert.equal(up.geometryName, 'UpVisGeometry');
+  const g = up.geometryClass;
+  assert.match(g, /^package org\.firstinspires\.ftc\.team2844simple\.autos\.geometries;/);
+  assert.match(g, /public final class UpVisGeometry \{\n    private UpVisGeometry\(\) \{\}/);
+  assert.match(g, /public static Pose startingPose\(PoseFactory f\) \{\n        return f\.of\(72\.0 \+ Constants\.ROBOT_LENGTH \/ 2\.0, 144\.0 - Constants\.ROBOT_WIDTH \/ 2\.0, -90\.0\);/);
+  assert.match(g, /public static Path toGarden\(PoseFactory f\) \{\n        Pose start = startingPose\(f\);\n        Pose intakeFromGarden = intakeFromGarden\(f\);\n        return Paths\.curve\(start, f\.of\(108\.0, 120\.0, 0\.0\), intakeFromGarden\)/);
+  assert.doesNotMatch(g, /Command|PedroAutoDsl|ShootCmd/, 'no routine code or imports leak into the geometry file');
+  const r = up.teamRoutineClass;
+  assert.match(r, /import org\.firstinspires\.ftc\.team2844simple\.autos\.geometries\.UpVisGeometry;/);
+  assert.match(r, /return UpVisGeometry\.startingPose\(field\(\)\);/);
+  assert.match(r, /subsystems\.drive\.follow\(UpVisGeometry\.toGarden\(f\)\)\s+\.deadlineWith\(/);
+  assert.match(r, /b\.follow\(UpVisGeometry\.readyShoot1\(f\)\);/);
+  assert.doesNotMatch(r, /Paths\.|Interpolator/, 'no path building in the routine file');
+  assert.ok(balanced(g) && balanced(r));
+  // helpers land in the file that uses them
+  const solo = gen(PRESETS.find((p) => p.id === 'solo').make());
+  assert.match(solo.geometryClass, /private static Interpolator jointSafe/);
+  assert.doesNotMatch(solo.teamRoutineClass, /jointSafe/);
+});
+
+test('team layout: markers keep reached() in the routine, same package needs no import', () => {
+  const p = emptyProject();
+  p.className = 'Sweep';
+  p.steps = [{ id: 'a', type: 'path', name: 'sweep', endName: 'far', segments: [{ type: 'line', controls: [], end: { x: 100, y: 100 } }], endH: 0, heading: { mode: 'tangent' }, during: [], markers: [{ id: 'm', at: 0.5, cmd: { lib: 'spinUp', params: {} } }] }];
+  const settings = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
+  settings.code.geometryPackage = settings.code.routinePackage;
+  const out = generateJava(p, settings, resolveProject(p, settings, 'blue'));
+  assert.equal(out.geometryName, 'SweepGeometry');
+  assert.match(out.teamRoutineClass, /private boolean reached\(int segment, double inchesLeft\)/);
+  assert.doesNotMatch(out.geometryClass, /reached/);
+  assert.doesNotMatch(out.teamRoutineClass, /import .*SweepGeometry;/);
+});
+
+test('names that would clash with AutoBase or the Geometry methods are renamed', () => {
+  const p = emptyProject();
+  p.steps = [{ id: 'a', type: 'path', name: 'routine', endName: 'startingPose', segments: [{ type: 'line', controls: [], end: { x: 100, y: 100 } }], endH: 0, heading: { mode: 'tangent' }, during: [], markers: [] }];
+  const out = gen(p);
+  assert.match(out.geometryClass, /public static Pose startingPose2\(PoseFactory f\)/);
+  assert.match(out.geometryClass, /public static Path routine2\(PoseFactory f\)/);
+});

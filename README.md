@@ -41,12 +41,14 @@ Then open <http://localhost:8000>. Any static host works, because ES modules nee
 | End a path on a shared spot | Pick a **Named pose** in the path editor, or drag the path end near one and it snaps. Poses with Java (like `AutoPaths.xFlower(f)`) export as that expression. Edit the list in *Settings → Named points*. |
 | See what the robot is doing | While playing or scrubbing, the bottom-right of the field shows the current step and the commands running at that moment. |
 | Use it at a competition | After one visit the site works **offline**, and browsers offer to install it as an app. |
+| Measure a distance | Turn on **Ruler** (top-right of the field) and drag between two spots. Esc puts it away. |
 | See all shortcuts | Press **?**. |
 
 ### Exports
 
 - **Paste-in methods:** `startingPose()` + `routine()`, plus a `reached()` helper if you used markers. Paste them into any class that `extends AutoBase`. This is the fastest way to test.
 - **Routine class:** an abstract `XxxRoutine extends AutoBase` with its package and imports.
+- **Geometry class + Routine (uses Geometry):** the team's two-file layout. The Geometry class holds static poses and paths (like `UpGeometry`), and the routine follows them (like `UpRoutine`). Use these two instead of "Routine class" if you want that layout.
 - **Blue / Red OpModes:** `@Autonomous` subclasses that set `alliance()` and `target()`.
 
 Markers export as `drive.follow(path).deadlineWith(Commands.sequence(Commands.waitUntil(() -> reached(segment, inchesLeft)), cmd))`. `reached` reads `follower.pathIndex()` and `follower.remainingDistance()`, and does not use `completion()`, because in Pedro 3.0.1 `completion()` mixes the current segment's t with the whole path on multi-segment paths. ValleyLib's scheduler runs subsystem `periodic()` (and so `follower.update()`) before commands, so the check always sees the current path.

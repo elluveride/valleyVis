@@ -5,7 +5,9 @@ import { copyText, download, h, toast } from '../util.js';
 
 const TABS = [
   ['methods', 'Paste-in methods', 'startingPose() + routine() for any class that extends AutoBase. Quickest way to test.'],
-  ['routineClass', 'Routine class', 'A full abstract routine class (like UpRoutine), with imports.'],
+  ['routineClass', 'Routine class', 'A full abstract routine class with the poses and paths inside it.'],
+  ['geometryClass', 'Geometry class', 'Team layout, file 1 of 2: static poses and paths, like UpGeometry. Goes in the geometries package.'],
+  ['teamRoutineClass', 'Routine (uses Geometry)', 'Team layout, file 2 of 2: the routine that follows the Geometry paths, like UpRoutine. Use this instead of "Routine class".'],
   ['blueOpMode', 'Blue OpMode', '@Autonomous class that picks the blue alliance and target().'],
   ['redOpMode', 'Red OpMode', '@Autonomous class that picks the red alliance and target().'],
 ];
@@ -20,7 +22,8 @@ export function createExportDialog(overlay, app) {
   const notes = h('div');
   const fileName = () => {
     if (!result) return 'Routine.java';
-    if (tab === 'routineClass') return `${result.className}.java`;
+    if (tab === 'routineClass' || tab === 'teamRoutineClass') return `${result.className}.java`;
+    if (tab === 'geometryClass') return `${result.geometryName}.java`;
     if (tab === 'blueOpMode') return `${(result.blueOpMode.match(/public class (\w+)/) || [])[1] || 'BlueAuto'}.java`;
     if (tab === 'redOpMode') return `${(result.redOpMode.match(/public class (\w+)/) || [])[1] || 'RedAuto'}.java`;
     return `${result.className}-methods.java`;

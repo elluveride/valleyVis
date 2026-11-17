@@ -44,7 +44,10 @@ const step = (i) => {
     const nseg = 1 + int(3);
     const segments = [];
     for (let k = 0; k < nseg; k++) { const nc = int(4); segments.push({ type: nc ? 'curve' : 'line', controls: Array.from({ length: nc }, () => ({ x: coord(), y: coord() })), end: { x: coord(), y: coord() } }); }
-    return { id, type, name: pick(NAMES), endName: pick(NAMES), segments, endH: deg(), heading: heading(), maxSpeed: pick([null, null, 0.5, 1]), timeout: pick([null, null, 3, 0.75]), during: Array.from({ length: int(3) }, cmd), markers: Array.from({ length: int(3) }, (_, m) => ({ id: `${id}m${m}`, at: Math.round(rnd() * 100) / 100, cmd: cmd() })) };
+    // sometimes end on one of the team's shared poses, tied by name like the editor does
+    const pose = rnd() < 0.15 ? pick(DEFAULT_SETTINGS.points.filter((q) => q.h !== null)) : null;
+    if (pose) segments[segments.length - 1].end = { x: pose.x, y: pose.y };
+    return { id, type, name: pick(NAMES), endName: pick(NAMES), segments, endH: pose ? pose.h : deg(), ...(pose ? { endRef: pose.name } : {}), heading: heading(), maxSpeed: pick([null, null, 0.5, 1]), timeout: pick([null, null, 3, 0.75]), during: Array.from({ length: int(3) }, cmd), markers: Array.from({ length: int(3) }, (_, m) => ({ id: `${id}m${m}`, at: Math.round(rnd() * 100) / 100, cmd: cmd() })) };
   }
   if (type === 'action') return { id, type, label: pick(['', 'shoot', 'note */ with // odd chars', 'line1']), cmds: Array.from({ length: int(4) }, cmd), timeout: pick([null, null, 2, 0.5]) };
   if (type === 'wait') return { id, type, seconds: pick([0, 0.5, 2, 'L/10']) };
@@ -103,10 +106,17 @@ for (let c = 0; c < n; c++) {
   expectations.push({ c, bad: firstPath ? bad : null, ...verdict });
   allProjects.push(proj);
   const g = generateJava(proj, DEFAULT_SETTINGS, resolveProject(proj, DEFAULT_SETTINGS, 'blue'));
-  const write = (pkg, src) => { const cls = src.match(/public (?:abstract )?class (\w+)/)[1]; const dir = path.join(out, ...pkg.split('.')); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, `${cls}.java`), src); };
+  const write = (pkg, src) => { const cls = src.match(/public (?:abstract |final )?class (\w+)/)[1]; const dir = path.join(out, ...pkg.split('.')); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, `${cls}.java`), src); };
   write(DEFAULT_SETTINGS.code.routinePackage, g.routineClass);
   write(DEFAULT_SETTINGS.code.bluePackage, g.blueOpMode);
   write(DEFAULT_SETTINGS.code.redPackage, g.redOpMode);
+  // the same routine again in the team layout (Geometry class + routine that uses it), as "<name>T"
+  const teamProj = { ...proj, className: `Fuzz${c}TRoutine`, opModeName: `Fuzz ${c} T` };
+  const t = generateJava(teamProj, DEFAULT_SETTINGS, resolveProject(teamProj, DEFAULT_SETTINGS, 'blue'));
+  write(DEFAULT_SETTINGS.code.geometryPackage, t.geometryClass);
+  write(DEFAULT_SETTINGS.code.routinePackage, t.teamRoutineClass);
+  write(DEFAULT_SETTINGS.code.bluePackage, t.blueOpMode);
+  write(DEFAULT_SETTINGS.code.redPackage, t.redOpMode);
 }
 fs.writeFileSync(path.join(out, 'expect.json'), JSON.stringify(expectations));
 fs.writeFileSync(path.join(out, 'projects.json'), JSON.stringify(allProjects));

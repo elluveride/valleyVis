@@ -7,7 +7,7 @@ maybe = collections.Counter()
 kinds = collections.Counter()
 for line in open(run + '/java.txt'):
     c, al, res = line.rstrip('\n').split(' ', 2)
-    e = exp[int(c)]
+    e = exp[int(c.rstrip('T'))]  # "12T" is routine 12 exported in the team layout
     predicted = len(e[al.lower()]) > 0
     threw = res != 'ok'
     if not predicted and len(e[al.lower() + 'Maybe']) > 0:

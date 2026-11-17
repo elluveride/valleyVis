@@ -60,7 +60,7 @@ export function createContext(project, settings, resolvedBlue) {
     warnings: [],
     usesMarkers: false,
     usesJointSafe: false,
-    name: makeNames(['f', 'b', 'subsystems', 'reached', 'jointSafe', 'start']),
+    name: makeNames(['f', 'b', 'subsystems', 'reached', 'jointSafe', 'start', 'startingPose', 'routine', 'field', 'alliance', 'target']),
   };
 }
 
@@ -179,10 +179,19 @@ export function headingSuffix(heading, pathCtx, ctx, pad) {
 const POSE_PAD = '        '; // statements inside routine()
 const B_PAD = '            '; // statements inside the PedroAutoDsl lambda
 
+/** Token for "this path" in builder lines; each layout swaps in its own way of naming a path. */
+const pathRef = (name) => `\u0001${name}\u0001`;
+const renderPathRefs = (text, fn) => text.replace(/\u0001(\w+)\u0001/g, (m, name) => fn(name));
+
+function addPose(state, name, expr) {
+  state.poses.push(`Pose ${name} = ${expr};`);
+  state.poseDefs.push({ name, expr });
+}
+
 function ensureStartVar(ctx, state, wanted) {
   if (state.cur.var) return state.cur.var;
   const v = ctx.name(wanted, 'pathStart');
-  state.poses.push(`Pose ${v} = ${poseOf(ctx, state.cur.x, state.cur.y, state.cur.h)};`);
+  addPose(state, v, poseOf(ctx, state.cur.x, state.cur.y, state.cur.h));
   state.cur.var = v;
   return v;
 }
@@ -213,15 +222,18 @@ function genPath(step, ctx, state) {
   const last = segs[segs.length - 1];
   const endVar = ctx.name(step.endName || `${pathName}End`, 'pathEnd');
   const named = namedEndPose(step, ctx.settings);
-  state.poses.push(named && named.java && named.ph !== null
-    ? `Pose ${endVar} = ${named.java.trim().replace(/;$/, '')};`
-    : `Pose ${endVar} = ${poseOf(ctx, last.end.x, last.end.y, step.endH ?? 0)};`);
+  addPose(state, endVar, named && named.java && named.ph !== null
+    ? named.java.trim().replace(/;$/, '')
+    : poseOf(ctx, last.end.x, last.end.y, step.endH ?? 0));
   let prev = startVar;
+  const joints = [];
   const segExprs = segs.map((seg, i) => {
     let to = endVar;
     if (i < segs.length - 1) {
       to = ctx.name(`${pathName} joint ${i + 1}`, 'joint');
-      state.poses.push(`Pose ${to} = ${poseOf(ctx, seg.end.x, seg.end.y, 0)};`);
+      const expr = poseOf(ctx, seg.end.x, seg.end.y, 0);
+      state.poses.push(`Pose ${to} = ${expr};`);
+      joints.push({ name: to, expr });
     }
     const controls = seg.type === 'curve' ? seg.controls || [] : [];
     const expr = controls.length
@@ -237,16 +249,18 @@ function genPath(step, ctx, state) {
   const pathCtx = { startVar, endVar, endX: last.end.x, endY: last.end.y, multiSegment: segs.length > 1, name: pathName };
   const suffix = headingSuffix(step.heading, pathCtx, ctx, cont);
   state.paths.push(`Path ${pathName} = ${body}${suffix};`);
+  state.pathDefs.push({ name: pathName, start: startVar, end: endVar, joints, body, suffix });
 
   const drive = ctx.settings.code.drive;
   const speed = step.maxSpeed === null || step.maxSpeed === undefined || step.maxSpeed === '' ? null : ctx.jv(step.maxSpeed);
   const during = (step.during || []).map((r) => commandExpr(r, ctx));
   const markers = (step.markers || []).map((m) => markerSequence(m, step, ctx));
   const hasTimeout = !(step.timeout === null || step.timeout === undefined || step.timeout === '');
+  const ref = pathRef(pathName);
   if (!during.length && !markers.length && !hasTimeout) {
-    state.builder.push(speed ? `b.follow(${pathName}, ${speed});` : `b.follow(${pathName});`);
+    state.builder.push(speed ? `b.follow(${ref}, ${speed});` : `b.follow(${ref});`);
   } else {
-    let expr = `${drive}.follow(${pathName}${speed ? `, ${speed}` : ''})`;
+    let expr = `${drive}.follow(${ref}${speed ? `, ${speed}` : ''})`;
     if (hasTimeout) expr += `\n        .withTimeout(${ctx.jv(step.timeout)})`;
     const parallel = [...during, ...markers];
     if (parallel.length) expr += `\n        .deadlineWith(${argList(parallel, '                ')})`;
@@ -355,8 +369,9 @@ export function generateBody(project, settings, resolvedBlue) {
   const ctx = createContext(project, settings, resolvedBlue);
   useImport(ctx, 'com.pedropathing.api.PoseFactory', 'com.pedropathing.math.Pose', 'com.vcs.valleylib.core.command.Command', 'com.vcs.valleylib.ftc.pedro.PedroAutoDsl');
   const s = project.start || { x: 72, y: 72, h: 0 };
-  const state = { poses: ['Pose start = startingPose();'], paths: [], builder: [], cur: { var: 'start', x: s.x, y: s.y, h: s.h ?? 0 } };
+  const state = { poses: ['Pose start = startingPose();'], paths: [], builder: [], poseDefs: [], pathDefs: [], cur: { var: 'start', x: s.x, y: s.y, h: s.h ?? 0 } };
   for (const step of project.steps || []) genStep(step, ctx, state);
+  const startExpr = `.of(${ctx.jv(s.x)}, ${ctx.jv(s.y)}, ${ctx.jv(s.h ?? 0)})`;
 
   const startingPose = [
     '    @Override',
@@ -375,7 +390,7 @@ export function generateBody(project, settings, resolvedBlue) {
     ...(state.paths.length ? ['', '        /* ----- Paths ----- */', ...state.paths.map((l) => POSE_PAD + l)] : []),
     '',
     `        return PedroAutoDsl.auto(${settings.code.drive}, b -> {`,
-    ...state.builder.map((l) => padLines(l, B_PAD)),
+    ...state.builder.map((l) => padLines(renderPathRefs(l, (name) => name), B_PAD)),
     '        });',
     '    }',
   ].join('\n');
@@ -388,7 +403,97 @@ export function generateBody(project, settings, resolvedBlue) {
   for (const [simple, fqcn] of Object.entries(knownClasses(settings))) {
     if (new RegExp(`(^|[^\\w.])${simple}\\b`).test(all)) useImport(ctx, fqcn);
   }
-  return { startingPose, routine, helper, imports: [...ctx.imports].sort(), warnings: ctx.warnings };
+  const model = { startExpr, poseDefs: state.poseDefs, pathDefs: state.pathDefs, builder: state.builder, usesMarkers: ctx.usesMarkers, usesJointSafe: ctx.usesJointSafe, ctx };
+  return { startingPose, routine, helper, imports: [...ctx.imports].sort(), warnings: ctx.warnings, model };
+}
+
+/** Imports a piece of generated Java needs, found by the class names it mentions. */
+function importsFor(text, settings, extra = {}) {
+  const out = new Set();
+  for (const [simple, fqcn] of Object.entries({ ...knownClasses(settings), ...extra })) {
+    if (fqcn && new RegExp(`(^|[^\\w.])${simple}\\b`).test(text)) out.add(fqcn);
+  }
+  return [...out].sort();
+}
+
+/**
+ * The team's file layout: a Geometry class of static poses and paths (like UpGeometry),
+ * and a routine class that follows them (like UpRoutine).
+ */
+function generateTeamLayout(project, settings, body, className) {
+  const { model } = body;
+  const geometryName = /Routine$/.test(className) ? className.replace(/Routine$/, 'Geometry') : `${className}Geometry`;
+  const geometryPackage = settings.code.geometryPackage || settings.code.routinePackage;
+  const pad = '        ';
+
+  const poseMethods = [
+    `    public static Pose startingPose(PoseFactory f) {\n        return f${model.startExpr};\n    }`,
+    ...model.poseDefs.map((d) => `    public static Pose ${d.name}(PoseFactory f) {\n        return ${d.expr};\n    }`),
+  ];
+  const poseCall = (name) => (name === 'start' ? 'startingPose(f)' : `${name}(f)`);
+  const pathMethods = model.pathDefs.map((d) => [
+    `    public static Path ${d.name}(PoseFactory f) {`,
+    `${pad}Pose ${d.start} = ${poseCall(d.start)};`,
+    `${pad}Pose ${d.end} = ${poseCall(d.end)};`,
+    ...d.joints.map((j) => `${pad}Pose ${j.name} = ${j.expr};`),
+    `${pad}return ${d.body}${d.suffix};`,
+    '    }',
+  ].join('\n'));
+  const geometryMembers = [
+    `    private ${geometryName}() {}`,
+    '',
+    '    /* ----- Poses ----- */',
+    poseMethods.join('\n\n'),
+    ...(pathMethods.length ? ['', '    /* ----- Paths ----- */', pathMethods.join('\n\n')] : []),
+    ...(model.usesJointSafe ? ['', jointSafeHelper(model.ctx)] : []),
+  ].join('\n');
+  const geometry = [
+    `package ${geometryPackage};`,
+    '',
+    importLines(importsFor(geometryMembers, settings)),
+    '',
+    '/**',
+    ` * Generated by ValleyVis from "${project.name}".`,
+    ' * Poses and paths are written in the blue frame; pass field() to get the right alliance.',
+    ' */',
+    `public final class ${geometryName} {`,
+    geometryMembers,
+    '}',
+    '',
+  ].join('\n');
+
+  const routineMembers = [
+    '    @Override',
+    '    public Pose startingPose() {',
+    `        return ${geometryName}.startingPose(${settings.code.poseFactory});`,
+    '    }',
+    '',
+    '    @Override',
+    '    protected Command routine() {',
+    `        PoseFactory f = ${settings.code.poseFactory};`,
+    `        return PedroAutoDsl.auto(${settings.code.drive}, b -> {`,
+    ...model.builder.map((l) => padLines(renderPathRefs(l, (name) => `${geometryName}.${name}(f)`), B_PAD)),
+    '        });',
+    '    }',
+    ...(model.usesMarkers ? ['', reachedHelper(model.ctx)] : []),
+  ].join('\n');
+  const routineImports = importsFor(routineMembers, settings, {
+    [geometryName]: geometryPackage === settings.code.routinePackage ? null : `${geometryPackage}.${geometryName}`,
+  });
+  const routine = [
+    `package ${settings.code.routinePackage};`,
+    '',
+    importLines([...new Set([...routineImports, settings.code.baseImport])].sort()),
+    '',
+    '/**',
+    ` * Generated by ValleyVis from "${project.name}". Paths live in ${geometryName}.`,
+    ' */',
+    `public abstract class ${className} extends ${settings.code.baseClass} {`,
+    routineMembers,
+    '}',
+    '',
+  ].join('\n');
+  return { geometryName, geometry, routine };
 }
 
 function importLines(imports) {
@@ -451,10 +556,14 @@ export function generateJava(project, settings, resolvedBlue) {
     ].join('\n');
   };
 
+  const team = generateTeamLayout(project, settings, body, className);
   return {
     className,
     methods,
     routineClass,
+    geometryName: team.geometryName,
+    geometryClass: team.geometry,
+    teamRoutineClass: team.routine,
     blueOpMode: opMode('blue'),
     redOpMode: opMode('red'),
     imports: body.imports,
