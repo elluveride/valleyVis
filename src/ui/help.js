@@ -13,6 +13,7 @@ const SECTIONS = [
     ['Hold Shift while dragging', 'No snapping: 0.01 in and 0.1° steps'],
     ['Click empty field', 'Deselect'],
     ['Ruler button, then drag', 'Measure a distance and direction'],
+    ['Click the park route', 'Edit where the robot parks: drag the pose, its knob, or a corridor corner'],
   ]],
   ['Keyboard', [
     ['Space', 'Play / pause'],

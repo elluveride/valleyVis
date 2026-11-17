@@ -41,6 +41,7 @@ Then open <http://localhost:8000>. Any static host works, because ES modules nee
 | End a path on a shared spot | Pick a **Named pose** in the path editor, or drag the path end near one and it snaps. Poses with Java (like `AutoPaths.xFlower(f)`) export as that expression. Edit the list in *Settings → Named points*. |
 | See what the robot is doing | While playing or scrubbing, the bottom-right of the field shows the current step and the commands running at that moment. |
 | Use it at a competition | After one visit the site works **offline**, and browsers offer to install it as an app. |
+| Change where the robot parks | Click the **Park** card (or the dashed park route, or the *park* block on the timeline). Drag the park pose, its heading knob, or a corridor corner, or type values. Then use *Export Java → Park route (AutoPaths)* and paste it into `AutoPaths.java`, because the park is shared by every auto. *Reset to team code* puts it back. |
 | Measure a distance | Turn on **Ruler** (top-right of the field) and drag between two spots. Esc puts it away. |
 | See all shortcuts | Press **?**. |
 
@@ -50,6 +51,7 @@ Then open <http://localhost:8000>. Any static host works, because ES modules nee
 - **Routine class:** an abstract `XxxRoutine extends AutoBase` with its package and imports.
 - **Geometry class + Routine (uses Geometry):** the team's two-file layout. The Geometry class holds static poses and paths (like `UpGeometry`), and the routine follows them (like `UpRoutine`). Use these two instead of "Routine class" if you want that layout.
 - **Blue / Red OpModes:** `@Autonomous` subclasses that set `alliance()` and `target()`.
+- **Park route (AutoPaths):** a replacement for `park(f)` and `routeToPark(f, from, alliance)`. It drives the route as you edited it, starts from where the robot really is on red too, and skips legs too short for Pedro to follow.
 
 Markers export as `drive.follow(path).deadlineWith(Commands.sequence(Commands.waitUntil(() -> reached(segment, inchesLeft)), cmd))`. `reached` reads `follower.pathIndex()` and `follower.remainingDistance()`, and does not use `completion()`, because in Pedro 3.0.1 `completion()` mixes the current segment's t with the whole path on multi-segment paths. ValleyLib's scheduler runs subsystem `periodic()` (and so `follower.update()`) before commands, so the check always sees the current path.
 
@@ -82,7 +84,8 @@ These were found by running exported code against the real library (see *Backtes
 
 1. generates random routines that use every feature, plus shapes Pedro rejects;
 2. exports them and compiles the Java against the Pedro Pathing 3.0.1 and ValleyLib 2.0.0 sources (with small stand-ins for the FTC SDK and the team classes);
-3. builds every routine for both alliances the way the follower would, and compares what happened with what the Problems tab predicted.
+3. builds every routine for both alliances the way the follower would, and compares what happened with what the Problems tab predicted;
+4. compiles the exported park route and runs it from hundreds of end poses on both alliances, comparing every leg with the preview.
 
 The last full run covered 1,000 routines (2,000 builds): every "this will throw" and "this is fine" prediction matched. It needs a JDK, Node, Python 3, git, curl and unzip:
 
@@ -116,6 +119,7 @@ Code map (`src/`):
 - `lint.js`: subsystem conflicts, naming, heading hand-offs between paths
 - `share.js`: share-link encoding
 - `poses.js`: named poses (snapping, tying a path end to a pose)
+- `park.js`: the park route after the routine (team-code version, edited version, and its Java)
 - `store.js`: routine library, undo/redo, settings, saving to the browser
 - `render.js` / `interact.js`: canvas
 - `ui/`: panels and dialogs

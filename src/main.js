@@ -69,7 +69,7 @@ function updateNow() {
   const { sim } = store.derived();
   const active = sim.activeAt(store.playback.time);
   let what = '';
-  if (active.phase === 'park') what = 'AutoBase park route';
+  if (active.phase === 'park') what = store.state.settings.park.edited ? 'Park route (edited)' : 'AutoBase park route';
   else if (active.phase === 'done') what = sim.items.length ? 'Auto finished' : '';
   else {
     const step = store.state.project.steps.find((st) => st.id === active.item.stepId);
@@ -176,6 +176,7 @@ const timeline = createTimeline($('playback'), app);
 const settingsPage = createSettingsPage($('settingsOverlay'), app);
 const exportDialog = createExportDialog($('exportOverlay'), app);
 const help = createHelp($('helpOverlay'));
+app.openExport = (tab) => exportDialog.open(tab);
 interactions = attachInteractions(canvas, app);
 
 /* ---------- sidebar ---------- */
@@ -331,9 +332,8 @@ store.subscribe((kind, opts = {}) => {
   if (opts.source !== 'sidebar' && opts.source !== 'header') renderSidebar();
   else updateBadge(); // keep the problem count honest while typing
   if (kind === 'settings' && settingsPage.isOpen() && opts.source !== 'settings') settingsPage.rerender();
-  if (exportDialog.isOpen() && kind === 'project') exportDialog.render();
+  if (exportDialog.isOpen() && (kind === 'project' || kind === 'settings')) exportDialog.render();
   if (kind === 'ui') renderViewToggles();
-  if (kind === 'settings') resize();
   syncHeader();
   requestRender();
 });

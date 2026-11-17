@@ -160,7 +160,7 @@ export function checkCollisions(sim, resolved, settings) {
   }
   const issues = violations.map((v) => ({
     level: v.stepId === 'park' ? 'warn' : 'error',
-    stepId: v.stepId === 'park' || v.stepId === 'start' ? null : v.stepId,
+    stepId: v.stepId === 'park' ? '__park' : v.stepId === 'start' ? null : v.stepId,
     zoneId: v.zoneId,
     msg: v.zoneId === 'wall'
       ? `${v.stepId === 'park' ? 'Park route' : v.stepId === 'start' ? 'Start pose' : 'Robot'} goes ${v.overrun.toFixed(1)} in past the field wall.`

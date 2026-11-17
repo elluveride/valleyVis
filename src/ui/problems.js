@@ -23,7 +23,7 @@ export function renderProblemsTab(container, app) {
   for (const iss of issues) {
     const idx = project.steps.findIndex((s) => s.id === iss.stepId);
     const step = idx >= 0 ? project.steps[idx] : null;
-    const where = step ? `Step ${idx + 1} · ${stepTitle(step)}` : iss.stepId === 'start' ? 'Start pose' : 'Routine';
+    const where = step ? `Step ${idx + 1} · ${stepTitle(step)}` : iss.stepId === 'start' ? 'Start pose' : iss.stepId === '__park' ? 'Park route' : 'Routine';
     const dotCls = iss.level === 'error' ? 'err' : iss.level === 'warn' ? 'warn' : 'info';
     container.append(h(`div.issue.${iss.level}`, {
       onclick: () => {
@@ -31,6 +31,9 @@ export function renderProblemsTab(container, app) {
           app.store.setUi({ selectedStepId: step.id, tab: 'routine' });
           const item = d.sim.items.find((i) => i.stepId === step.id);
           if (item) app.seek(item.t0);
+        } else if (iss.stepId === '__park') {
+          app.store.setUi({ selectedStepId: '__park', tab: 'routine' });
+          if (d.sim.park) app.seek(d.sim.park.t0);
         } else if (iss.zoneId) {
           app.store.setUi({ selectedZoneId: iss.zoneId, tab: 'zones' });
         }

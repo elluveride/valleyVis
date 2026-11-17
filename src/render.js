@@ -377,23 +377,59 @@ function drawFootprints(ctx, view, sim, settings) {
   ctx.restore();
 }
 
-function drawPark(ctx, view, park) {
+function drawPark(ctx, view, park, selected, settings, handles, pathPolys, labels) {
   if (!park) return;
+  const color = park.edited ? '#5eead4' : 'rgba(203, 213, 225, 0.75)';
   ctx.save();
-  ctx.setLineDash([6, 5]);
-  ctx.strokeStyle = 'rgba(203, 213, 225, 0.65)';
-  ctx.lineWidth = 2;
+  if (selected) {
+    // the corridor decision line: robots ending on one side use one corridor, the rest the other
+    const [ta, tb] = park.threshold.map((q) => view.toScreen(q));
+    ctx.setLineDash([2, 6]);
+    ctx.strokeStyle = 'rgba(94, 234, 212, 0.45)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(ta.x, ta.y);
+    ctx.lineTo(tb.x, tb.y);
+    ctx.stroke();
+  }
+  ctx.setLineDash(park.edited ? [] : [6, 5]);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = selected ? 3 : 2;
+  const pts = [];
   for (const leg of park.legs) {
     const a = view.toScreen(leg.from);
     const b = view.toScreen(leg.to);
+    pts.push(a, b);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
   }
   ctx.restore();
-  const end = view.toScreen(park.legs[park.legs.length - 1].to);
-  drawLabel(ctx, end, 'AutoBase park', '#cbd5e1');
+  if (pts.length) pathPolys.push({ stepId: '__park', pts });
+  const last = park.legs[park.legs.length - 1];
+  const parkPose = last ? last.to : null;
+  if (!parkPose) return;
+  const end = view.toScreen(parkPose);
+  if (labels || selected) drawLabel(ctx, end, park.edited ? 'Park (edited)' : 'AutoBase park', park.edited ? '#99f6e4' : '#cbd5e1');
+  if (!selected) return;
+  // corridor corners: drag one to move that corridor and the approach line
+  for (const which of ['middle', 'outer']) {
+    const c = view.toScreen(park.corners[which]);
+    const active = park.corridor === which;
+    ctx.save();
+    ctx.globalAlpha = active ? 1 : 0.55;
+    handle(ctx, c, 'square', active ? '#5eead4' : '#94a3b8', 7);
+    ctx.restore();
+    handles.push({ kind: 'parkCorner', corridor: which, stepId: '__park', x: c.x, y: c.y, r: 9 });
+    drawLabel(ctx, c, `${which} corridor`, active ? '#99f6e4' : '#94a3b8', 22);
+  }
+  drawRobot(ctx, view, parkPose, settings, { stroke: '#5eead4', dash: [5, 4], width: 1.5 });
+  handle(ctx, end, 'circle', '#5eead4', 7);
+  handles.push({ kind: 'parkPose', stepId: '__park', x: end.x, y: end.y, r: 9 });
+  const knob = headingKnob(view, parkPose, settings);
+  drawKnob(ctx, knob, '#5eead4');
+  handles.push({ kind: 'parkHeading', stepId: '__park', x: knob.x, y: knob.y, r: 8 });
 }
 
 function drawViolations(ctx, view, collisions, settings) {
@@ -497,7 +533,7 @@ export function render(ctx, view, store, images, extra = {}) {
   drawAxes(ctx, view);
   drawZones(ctx, view, d.resolved.zones, ui, handles);
   drawPoints(ctx, view, d.resolved.points, ui.view.labels);
-  if (ui.view.park) drawPark(ctx, view, d.sim.park);
+  if (ui.view.park || ui.selectedStepId === '__park') drawPark(ctx, view, d.sim.park, ui.selectedStepId === '__park', settings, handles, pathPolys, ui.view.labels);
   if (ui.view.footprints) drawFootprints(ctx, view, d.sim, settings);
 
   let colorIdx = 0;

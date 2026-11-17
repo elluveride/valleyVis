@@ -820,7 +820,7 @@ tests.offline = async (browser) => {
   await page.waitForFunction(() => !!window.valleyVis);
   const t = helpers(page);
   await page.evaluate(() => navigator.serviceWorker.ready);
-  await page.waitForFunction(async () => (await (await caches.open('valleyvis-v1')).keys()).length >= 30, null, { timeout: 15000 });
+  await page.waitForFunction(async () => (await (await caches.open('valleyvis-v2')).keys()).length >= 30, null, { timeout: 15000 });
   await t.example('solo');
   await page.waitForTimeout(500);
   // pull the plug
@@ -857,6 +857,75 @@ tests.ruler = async (browser, url) => {
   await page.keyboard.press('Escape');
   check('ruler: Esc puts it away', (await t.ui()).tool === 'select' && (await t.ev(() => window.valleyVis.measure())) === null);
   check('ruler: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.parkEditing = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  const park = () => t.ev(() => JSON.parse(JSON.stringify(window.valleyVis.store.state.settings.park)));
+  check('park: starts as the team code', (await park()).edited === false && /team code/.test(await page.locator('[data-step="__park"] .hd').innerText()));
+  // select it by clicking the park block on the timeline
+  const blk = await page.locator('.strip [data-step="__park"]').boundingBox();
+  await page.mouse.click(blk.x + blk.width / 2, blk.y + blk.height / 2);
+  check('park: clicking the timeline block selects it', (await t.ui()).selectedStepId === '__park' && (await page.locator('.card[data-step="__park"].sel').count()) === 1);
+  // drag the park pose
+  let hd = (await t.handle((x) => x.kind === 'parkPose'))[0];
+  check('park: the pose handle is shown when selected', !!hd);
+  await t.drag({ x: hd.cx, y: hd.cy }, await t.at(130, 40));
+  let p = await park();
+  check('park: dragging the pose moves it and marks the park edited', p.edited && near(p.pose.x, 130, 0.26) && near(p.pose.y, 40, 0.26), JSON.stringify(p));
+  const last = await t.ev(() => { const pk = window.valleyVis.store.derived().sim.park; const l = pk.legs[pk.legs.length - 1].to; return [l.x, l.y]; });
+  check('park: the simulated route ends on the new pose', near(last[0], p.pose.x, 1e-6) && near(last[1], p.pose.y, 1e-6), JSON.stringify(last));
+  // drag the active corridor corner
+  hd = (await t.handle((x) => x.kind === 'parkCorner' && x.corridor === 'outer'))[0];
+  await t.drag({ x: hd.cx, y: hd.cy }, await t.at(110, 30));
+  p = await park();
+  check('park: dragging a corridor corner moves that corridor and the approach line', near(p.outerX, 110, 0.26) && near(p.approachY, 30, 0.26) && p.middleX === 84, JSON.stringify(p));
+  // heading knob
+  hd = (await t.handle((x) => x.kind === 'parkHeading'))[0];
+  await t.drag({ x: hd.cx, y: hd.cy }, await t.at(p.pose.x, p.pose.y + 30));
+  check('park: the knob sets the park heading', (await park()).pose.h === 90, String((await park()).pose.h));
+  // typed values
+  const mid = page.locator('[data-key="park.middleMaxX"]');
+  await mid.fill('120');
+  await mid.press('Tab');
+  check('park: typed values apply', (await park()).middleMaxX === 120 && (await t.ev(() => window.valleyVis.store.derived().sim.park.corridor)) === 'middle');
+  await page.locator('[data-key="park.x"]').fill('144-L/2');
+  await page.locator('[data-key="park.x"]').press('Tab');
+  check('park: the pose takes expressions', (await park()).pose.x === '144-L/2');
+  // reminder + export
+  check('park: Problems reminds you to export it', (await t.issues()).some((i) => i.stepId === '__park' && /Export Java/.test(i.msg)));
+  await page.click('[data-key="park.export"]');
+  const code = await page.locator('#exportOverlay pre.code').textContent();
+  check('park: "Show the Java" opens the park export with the edited values', /double corridorX = blue\.x\(\) < 120\.0 \? 84\.0 : 110\.0;/.test(code) && /f\.of\(corridorX, 30\.0, 0\.0\)/.test(code), code.match(/double corridorX.*/)?.[0]);
+  await page.keyboard.press('Escape');
+  // red preview: drags store blue-frame values
+  await page.click('#allianceToggle button[data-alliance="red"]');
+  await t.settle();
+  hd = (await t.handle((x) => x.kind === 'parkPose'))[0];
+  await t.drag({ x: hd.cx, y: hd.cy }, await t.atReal(20, 100));
+  p = await park();
+  check('park: dragging on the red preview stores the blue-frame pose', near(p.pose.x, 124, 0.26) && near(p.pose.y, 44, 0.26), JSON.stringify(p.pose));
+  const redStart = await t.ev(() => { const pk = window.valleyVis.store.derived(); const from = pk.sim.poseAt(pk.sim.cutAt); return Math.hypot(pk.sim.park.legs[0].from.x - from.x, pk.sim.park.legs[0].from.y - from.y); });
+  check('park: once edited, the red route starts where the robot is', redStart < 1e-6, String(redStart));
+  await page.click('#allianceToggle button[data-alliance="blue"]');
+  // reset
+  await page.click('[data-key="park.reset"]');
+  p = await park();
+  check('park: reset goes back to the team code', p.edited === false && p.outerX === 120 && p.pose.x === '144-L/2' && p.pose.h === 180);
+  check('park: and the reminder goes away', !(await t.issues()).some((i) => i.stepId === '__park'));
+  // Delete with the park selected does nothing
+  await page.locator('#field').focus();
+  await page.keyboard.press('Delete');
+  check('park: Delete with the park selected keeps every step', (await t.project()).steps.length === 6);
+  // survives a reload
+  await t.ev(() => window.valleyVis.store.updateSettings((st) => { st.park.edited = true; st.park.middleX = 77; }));
+  await page.waitForTimeout(400);
+  await page.reload();
+  await page.waitForFunction(() => !!window.valleyVis);
+  check('park: edits persist across a reload', (await park()).middleX === 77 && (await park()).edited === true);
+  check('park: no page errors', page.errors.length === 0, page.errors.join(' | '));
   await page.context().close();
 };
 

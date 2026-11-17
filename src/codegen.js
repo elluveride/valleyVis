@@ -2,6 +2,7 @@
 // team2844simple/autos (PoseFactory f = field(); blue design frame, mirrored for red).
 
 import { fillTemplate, fmtNum, javaValue } from './expr.js';
+import { parkJava } from './park.js';
 import { namedEndPose } from './poses.js';
 import { symbolTable } from './resolve.js';
 
@@ -566,6 +567,7 @@ export function generateJava(project, settings, resolvedBlue) {
     teamRoutineClass: team.routine,
     blueOpMode: opMode('blue'),
     redOpMode: opMode('red'),
+    parkRoute: parkJava(settings),
     imports: body.imports,
     warnings: body.warnings,
   };

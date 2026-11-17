@@ -115,6 +115,18 @@ export const DEFAULT_SETTINGS = {
     showPark: true,
     wallTolerance: 0.5, // in the robot may poke past a wall before it's flagged
   },
+  park: {
+    // AutoPaths.routeToPark. false = exactly the team code (red-alliance bug included);
+    // any edit switches to the exported replacement in src/park.js.
+    edited: false,
+    middleMaxX: 96, // blue frame: a robot that ends with x below this uses the middle corridor
+    middleX: 84, // middle corridor x
+    outerX: 120, // outer corridor x
+    approachY: 24, // the corridor is driven down to this y, then the robot goes in to the park pose
+    corridorH: -90, // heading reached by the end of the first leg
+    approachH: 0, // heading reached at the end of the corridor
+    pose: { x: '144-L/2', y: 24, h: 180 }, // AutoPaths.park(f)
+  },
   field: {
     image: 'assets/field-biobuzz.webp',
     customImage: null, // data URL from the Settings page

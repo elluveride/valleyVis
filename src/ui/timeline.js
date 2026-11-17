@@ -87,7 +87,7 @@ export function createTimeline(container, app) {
       }
     });
     if (sim.park) {
-      rowB.append(h('div.blk', { title: `AutoBase park route · ${sim.park.t0.toFixed(2)}–${sim.park.t1.toFixed(2)} s`, style: { left: pct(sim.park.t0), width: pct(sim.park.t1 - sim.park.t0), background: '#cbd5e1' } }, 'park'));
+      rowB.append(h(`div.blk${ui.selectedStepId === '__park' ? '.sel' : ''}`, { 'data-step': '__park', title: `${sim.park.edited ? 'Park route (edited)' : 'AutoBase park route'} · ${sim.park.t0.toFixed(2)}–${sim.park.t1.toFixed(2)} s · click to edit`, style: { left: pct(sim.park.t0), width: pct(sim.park.t1 - sim.park.t0), background: sim.park.edited ? '#5eead4' : '#cbd5e1' } }, 'park'));
     }
     for (let s = 1; s < scale; s += 1) rowA.append(h('div.tick', { style: { left: pct(s), top: '-4px' } }));
     strip.querySelectorAll('.line').forEach((el) => el.remove());

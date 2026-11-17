@@ -203,6 +203,10 @@ export function normalizeSettings(raw) {
     }
   }
   s.commands = uniqueIds(s.commands.map(command).filter(Boolean), 'cmd');
+  // the park pose may be a number or an expression; conform() only keeps the default's type
+  const rp = isObj(raw) && isObj(raw.park) && isObj(raw.park.pose) ? raw.park.pose : {};
+  const dp = DEFAULT_SETTINGS.park.pose;
+  s.park.pose = { x: val(rp.x, dp.x), y: val(rp.y, dp.y), h: val(rp.h, dp.h) };
   s.robot.length = Math.max(0.5, s.robot.length);
   s.robot.width = Math.max(0.5, s.robot.width);
   s.field.plusX = oneOf(s.field.plusX, ['up', 'right', 'down', 'left'], 'up');

@@ -119,6 +119,22 @@ export function attachInteractions(canvas, app) {
           if (isLast) delete s.endRef;
         }
       }, { history: false });
+    } else if (h.kind === 'parkPose' || h.kind === 'parkCorner' || h.kind === 'parkHeading') {
+      const d = toDesign(real, e);
+      const park = store.derived().sim.park;
+      store.updateSettings((st) => {
+        st.park.edited = true;
+        if (h.kind === 'parkPose') {
+          st.park.pose.x = d.x;
+          st.park.pose.y = d.y;
+        } else if (h.kind === 'parkHeading') {
+          const last = park?.legs[park.legs.length - 1];
+          if (last) st.park.pose.h = headingDeg(last.to, real, e);
+        } else {
+          if (h.corridor === 'middle') st.park.middleX = d.x; else st.park.outerX = d.x;
+          st.park.approachY = d.y;
+        }
+      }, { source: 'canvas' });
     } else if (h.kind === 'pathStart') {
       const d = toDesign(real, e);
       const src = startSource(project, h.stepId);
@@ -181,6 +197,7 @@ export function attachInteractions(canvas, app) {
 
   function selectFromHandle(h) {
     if (h.kind === 'start' || h.kind === 'startHeading') store.setUi({ selectedStepId: '__start', selectedZoneId: null });
+    else if (h.stepId === '__park') store.setUi({ selectedStepId: '__park', selectedZoneId: null, tab: 'routine' });
     else if (h.stepId) store.setUi({ selectedStepId: h.stepId, selectedZoneId: null });
     else if (h.zoneId) store.setUi({ selectedZoneId: h.zoneId });
   }
@@ -391,7 +408,7 @@ export function attachInteractions(canvas, app) {
       if (selectedZoneId) {
         store.update((pr) => { pr.zones = pr.zones.filter((z) => z.id !== selectedZoneId); });
         store.setUi({ selectedZoneId: null });
-      } else if (selectedStepId && selectedStepId !== '__start') {
+      } else if (selectedStepId && !selectedStepId.startsWith('__')) {
         store.update((pr) => { pr.steps = pr.steps.filter((s) => s.id !== selectedStepId); });
         store.setUi({ selectedStepId: null });
       }

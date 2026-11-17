@@ -4,7 +4,7 @@
 
 import { buildPath, deg2rad, normAngle, normSigned } from './geometry.js';
 import { makeInterpolator } from './heading.js';
-import { makeFrame } from './resolve.js';
+import { planPark } from './park.js';
 
 const DS = 0.25; // in between profile samples
 
@@ -177,22 +177,14 @@ function holdItem(step, pose, t0, dur) {
   return { item: { stepId: step.id, index: step.index, type: step.type, t0, t1: t0 + dur, motion: { kind: 'hold', pose: { ...pose } }, spans: [] }, pose };
 }
 
-/** AutoPaths.routeToPark, reproduced line for line (including its alliance handling). */
+/** The park legs as [from, to] pairs (see park.js). */
 export function parkLegs(from, alliance, settings) {
-  const frame = makeFrame(settings, alliance);
-  const f = (x, y, hDeg) => frame.pose(x, y, hDeg);
-  const L = settings.robot.length;
-  const p = alliance === 'red' ? frame.pose(from.x, from.y, (from.h * 180) / Math.PI) : { ...from };
-  const inMiddle = alliance === 'red' ? from.x > 96 : from.x < 96;
-  const cx = inMiddle ? 84 : 120;
-  const correctX = f(cx, from.y, -90);
-  const correctY = f(cx, 24, 0);
-  const park = f(144 - L / 2, 24, 180);
-  return [[p, correctX], [correctX, correctY], [correctY, park]];
+  return planPark(from, alliance, settings).pairs;
 }
 
 function parkPlan(fromPose, t0, settings, alliance) {
-  const legs = parkLegs(fromPose, alliance, settings).map(([a, b]) => {
+  const plan = planPark(fromPose, alliance, settings);
+  const legs = plan.pairs.map(([a, b]) => {
     const geom = buildPath([[{ x: a.x, y: a.y }, { x: b.x, y: b.y }]]);
     const interp = makeInterpolator({ k: 'linear', a: a.h, b: b.h }, geom);
     const prof = profilePath(geom, interp, settings.motion, 1);
@@ -205,7 +197,7 @@ function parkPlan(fromPose, t0, settings, alliance) {
     leg.t1 = t;
   }
   const end = Math.min(t + settings.motion.settle, t0 + settings.match.parkTimeout);
-  return { t0, t1: end, legs, jump: Math.hypot(legs[0].from.x - fromPose.x, legs[0].from.y - fromPose.y) };
+  return { t0, t1: end, cut: t > t0 + settings.match.parkTimeout, legs, jump: plan.jump, corridor: plan.corridor, corners: plan.corners, threshold: plan.threshold, edited: plan.params.edited, errors: plan.params.errors };
 }
 
 function motionPose(item, t) {
@@ -274,7 +266,14 @@ export function simulate(resolved, settings) {
     const from = routinePoseAt(cutAt);
     park = parkPlan(from, cutAt, settings, resolved.alliance);
     if (park.jump > 1) {
-      issues.push({ level: 'warn', stepId: null, msg: `AutoBase park route starts ${park.jump.toFixed(1)} in away from the robot (AutoPaths.routeToPark builds its first leg from a re-mirrored pose on ${resolved.alliance}).` });
+      issues.push({ level: 'warn', stepId: '__park', msg: `AutoBase park route starts ${park.jump.toFixed(1)} in away from the robot (AutoPaths.routeToPark builds its first leg from a re-mirrored pose on ${resolved.alliance}). Editing the park here and exporting it fixes this.` });
+    }
+    for (const msg of park.errors) issues.push({ level: 'error', stepId: '__park', msg });
+    if (park.cut) {
+      issues.push({ level: 'warn', stepId: '__park', msg: `The park route needs more than AutoBase's ${settings.match.parkTimeout} s, so the robot stops before it gets there.` });
+    }
+    if (park.edited) {
+      issues.push({ level: 'info', stepId: '__park', msg: 'The park route is edited here. Export Java → "Park route" and paste it into AutoPaths.java, or the robot keeps driving the old one.' });
     }
   }
   const end = park ? park.t1 : cutAt;

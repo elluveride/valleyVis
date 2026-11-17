@@ -39,5 +39,13 @@ echo "compiled $(grep -c "$WORK/gen" "$WORK/files.txt") generated files (both ex
 java -cp "$WORK/out" runner.RunAll "$N" > "$WORK/java.txt"
 python3 "$HERE/compare.py" "$WORK"
 
+echo "--- exported park route vs the visualizer"
+node "$HERE/park-check.mjs" gen "$WORK"
+find "$HERE/stubs/org/firstinspires/ftc/team2844simple/helpers/Constants.java" "$WORK/parkcheck" "$WORK/pedro/com" -name '*.java' > "$WORK/park-files.txt"
+mkdir -p "$WORK/park-out"
+javac -nowarn -d "$WORK/park-out" @"$WORK/park-files.txt"
+java -cp "$WORK/park-out" parkcheck.Run > "$WORK/park.txt"
+node "$HERE/park-check.mjs" compare "$WORK"
+
 echo "--- jointSafe() wrapper on 100000 random multi-segment piecewise paths"
 java -cp "$WORK/out" runner.JointSafe

@@ -2,6 +2,7 @@
 
 import { javaIdent } from '../codegen.js';
 import { displayDeg } from '../geometry.js';
+import { DEFAULT_SETTINGS, cloneDeep } from '../defaults.js';
 import { namedEndPose } from '../poses.js';
 import { findStep } from '../store.js';
 import { PATH_COLORS } from '../render.js';
@@ -416,7 +417,7 @@ function newStep(app, type) {
   const { store } = app;
   const sel = store.state.ui.selectedStepId;
   const steps = store.state.project.steps;
-  const insertAt = sel && sel !== '__start' ? steps.findIndex((s) => s.id === sel) + 1 : steps.length;
+  const insertAt = sel && !sel.startsWith('__') ? steps.findIndex((s) => s.id === sel) + 1 : steps.length;
   const pose = app.poseAt(insertAt);
   const n = steps.filter((s) => s.type === 'path').length + 1;
   const id = uid('step');
@@ -485,6 +486,92 @@ function startCard(app) {
   return card;
 }
 
+/* ---------- park route (AutoBase / AutoPaths.routeToPark) ---------- */
+
+function parkCard(app, d) {
+  const { store } = app;
+  const { settings, ui } = store.state;
+  const P = settings.park;
+  const park = d.sim.park;
+  const sel = ui.selectedStepId === '__park';
+  const issues = d.issues.filter((i) => i.stepId === '__park');
+  const worst = issues.some((i) => i.level === 'error') ? 'err' : issues.some((i) => i.level === 'warn') ? 'warn' : null;
+  const dur = park ? fmtSec(park.t1 - park.t0) : 'off';
+  const hd = h('div.hd', { onclick: () => {
+    store.setUi({ selectedStepId: sel ? null : '__park', selectedZoneId: null });
+    if (!sel && park) app.seek(park.t0);
+  } }, [
+    h('span.num', { text: 'P' }),
+    h('span.chip', { style: { background: P.edited ? '#5eead4' : '#cbd5e1' } }),
+    h('span.title', { text: P.edited ? 'Park · edited' : 'Park · AutoBase (team code)' }),
+    worst ? h(`span.dot.${worst}`, { title: issues.map((i) => i.msg).join('\n') }) : null,
+    h('span.dur', { text: dur }),
+  ]);
+  const card = h(`div.card${sel ? '.sel' : ''}`, { 'data-step': '__park' }, [hd]);
+  if (!sel) return card;
+
+  const body = h('div.bd');
+  if (!settings.match.showPark) {
+    body.append(
+      h('div.hint', { text: 'The park route is switched off, so nothing runs after the routine.' }),
+      h('button.small', { text: 'Turn the park route back on', onclick: () => store.updateSettings((st) => { st.match.showPark = true; }) }),
+    );
+    card.append(body);
+    return card;
+  }
+  // every edit marks the park as edited; the team-code version is one click away
+  const set = (fn) => (v, o) => store.updateSettings((st) => {
+    fn(st.park, v);
+    st.park.edited = true;
+  }, { ...o, source: o?.source || 'sidebar' });
+  const num = (key, label, value, fn, title) => fld(label, numInput(app, `park.${key}`, value, set(fn), { step: 0.5 }), title);
+  body.append(h('div.hint', { text: 'After the routine ends (or is cut at the timeout), AutoBase drives here: straight along y to a corridor, along the corridor to the approach line, then in to the park pose. Drag the ● pose, its knob, or a ■ corridor corner on the field, or type values.' }));
+
+  body.append(h('div.section-title', { text: 'Park pose (blue frame)' }));
+  body.append(h('div.grid3', {}, [
+    fld('x', exprInput(app, 'park.x', P.pose.x, set((pk, v) => { pk.pose.x = v; }))),
+    fld('y', exprInput(app, 'park.y', P.pose.y, set((pk, v) => { pk.pose.y = v; }))),
+    fld('heading °', exprInput(app, 'park.h', P.pose.h, set((pk, v) => { pk.pose.h = v; }))),
+  ]));
+  const poses = (settings.points || []).filter((pt) => pt.h !== null && pt.h !== undefined && pt.h !== '');
+  if (poses.length) {
+    body.append(fld('Use a named pose', selectInput('park.pose', [['', 'choose…'], ...poses.map((pt) => [pt.name, pt.name])], '', (v) => {
+      const pt = poses.find((q) => q.name === v);
+      if (pt) set((pk) => { pk.pose = { x: pt.x, y: pt.y, h: pt.h }; })();
+    })));
+  }
+
+  body.append(h('div.section-title', { text: 'Corridors' }));
+  body.append(h('div.grid2', {}, [
+    num('middleX', 'Middle corridor x', P.middleX, (pk, v) => { pk.middleX = v; }),
+    num('outerX', 'Outer corridor x', P.outerX, (pk, v) => { pk.outerX = v; }),
+    num('middleMaxX', 'Use the middle one when the robot ends at x below', P.middleMaxX, (pk, v) => { pk.middleMaxX = v; }, 'Decided in the blue frame, so red mirrors blue'),
+    num('approachY', 'Drive the corridor to y', P.approachY, (pk, v) => { pk.approachY = v; }),
+  ]));
+  body.append(h('div.section-title', { text: 'Headings along the way' }));
+  body.append(h('div.grid2', {}, [
+    num('corridorH', 'On reaching the corridor (°)', P.corridorH, (pk, v) => { pk.corridorH = v; }),
+    num('approachH', 'At the end of the corridor (°)', P.approachH, (pk, v) => { pk.approachH = v; }),
+  ]));
+
+  if (park) {
+    const driving = park.legs.length ? park.legs[park.legs.length - 1].t1 - park.t0 : 0;
+    body.append(h('div.stat', { text: `${park.corridor} corridor · ${park.legs.length} leg${park.legs.length === 1 ? '' : 's'} · drive ${driving.toFixed(2)} s · AutoBase allows ${settings.match.parkTimeout} s` }));
+  }
+  if (P.edited) {
+    body.append(h('div.warnbox', { text: 'Edited. The robot only drives this after you paste the export into AutoPaths.java (Export Java → Park route). The exported version also starts from where the robot really is on red.' }));
+    body.append(h('div.add-row', {}, [
+      h('button.small', { text: 'Show the Java', 'data-key': 'park.export', onclick: () => app.openExport('parkRoute') }),
+      h('button.small', { text: 'Reset to team code', 'data-key': 'park.reset', onclick: () => store.updateSettings((st) => { st.park = cloneDeep(DEFAULT_SETTINGS.park); }) }),
+    ]));
+  } else {
+    body.append(h('div.hint', { text: 'This is AutoPaths.routeToPark as your code has it now (on red it starts its first leg from the wrong spot). Change anything to edit it.' }));
+  }
+  for (const iss of issues) body.append(h(`div.issue.${iss.level}`, {}, [h(`span.dot.${iss.level === 'error' ? 'err' : iss.level === 'warn' ? 'warn' : 'info'}`), h('span', { text: iss.msg })]));
+  card.append(body);
+  return card;
+}
+
 export function renderRoutineTab(container, app) {
   const d = app.store.derived();
   const { project } = app.store.state;
@@ -495,8 +582,9 @@ export function renderRoutineTab(container, app) {
     const color = step.type === 'path' ? PATH_COLORS[colorIdx++ % PATH_COLORS.length] : null;
     container.append(stepCard(app, step, i, d, color));
   });
+  container.append(parkCard(app, d));
   const sel = app.store.state.ui.selectedStepId;
-  container.append(h('div.section-title', { text: sel && sel !== '__start' ? 'Add after selected step' : 'Add step' }));
+  container.append(h('div.section-title', { text: sel && !sel.startsWith('__') ? 'Add after selected step' : 'Add step' }));
   container.append(h('div.add-row', {}, [
     h('button', { text: '+ Path', onclick: () => newStep(app, 'path') }),
     h('button', { text: '+ Action', onclick: () => newStep(app, 'action') }),

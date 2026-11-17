@@ -10,6 +10,7 @@ const TABS = [
   ['teamRoutineClass', 'Routine (uses Geometry)', 'Team layout, file 2 of 2: the routine that follows the Geometry paths, like UpRoutine. Use this instead of "Routine class".'],
   ['blueOpMode', 'Blue OpMode', '@Autonomous class that picks the blue alliance and target().'],
   ['redOpMode', 'Red OpMode', '@Autonomous class that picks the red alliance and target().'],
+  ['parkRoute', 'Park route (AutoPaths)', 'Paste into AutoPaths.java in place of park(f) and routeToPark(f, from, alliance). It is shared by every auto, because AutoBase drives it after each routine.'],
 ];
 
 export function createExportDialog(overlay, app) {
@@ -24,6 +25,7 @@ export function createExportDialog(overlay, app) {
     if (!result) return 'Routine.java';
     if (tab === 'routineClass' || tab === 'teamRoutineClass') return `${result.className}.java`;
     if (tab === 'geometryClass') return `${result.geometryName}.java`;
+    if (tab === 'parkRoute') return 'AutoPaths-park.java';
     if (tab === 'blueOpMode') return `${(result.blueOpMode.match(/public class (\w+)/) || [])[1] || 'BlueAuto'}.java`;
     if (tab === 'redOpMode') return `${(result.redOpMode.match(/public class (\w+)/) || [])[1] || 'RedAuto'}.java`;
     return `${result.className}-methods.java`;
@@ -53,7 +55,8 @@ export function createExportDialog(overlay, app) {
     pre.textContent = result[tab];
   }
 
-  function open() {
+  function open(which) {
+    if (which && TABS.some((t) => t[0] === which)) tab = which;
     overlay.hidden = false;
     render();
   }
