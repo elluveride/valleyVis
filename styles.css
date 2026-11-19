@@ -215,6 +215,11 @@ pre.code {
 }
 .code-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
 .code-tabs button.on { border-color: var(--accent); color: var(--accent); }
+.code-tabs .more-label { color: var(--faint); font-size: 12px; align-self: center; margin-left: 8px; }
+.code-tabs button.more { font-size: 12px; padding: 3px 8px; color: var(--muted); }
+.points-opts { align-items: flex-end; gap: 10px; }
+.points-opts[hidden] { display: none; }
+.points-opts .fld { width: auto; }
 .warnbox { border: 1px solid #78350f; background: #1c1407; color: #fde68a; border-radius: 8px; padding: 8px 10px; font-size: 12px; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #0f172a; border: 1px solid var(--line-2); padding: 8px 14px; border-radius: 8px; z-index: 40; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
 

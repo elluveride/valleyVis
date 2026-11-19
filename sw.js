@@ -1,6 +1,6 @@
 // Offline support. Network first, so an online visit always gets the newest files; the cache
 // is only used when the network is down or too slow (competition venues, captive portals).
-const CACHE = 'valleyvis-v2';
+const CACHE = 'valleyvis-v3';
 const SHELL = [
   "./",
   "assets/field-biobuzz.webp",
@@ -19,6 +19,7 @@ const SHELL = [
   "src/lint.js",
   "src/main.js",
   "src/park.js",
+  "src/points.js",
   "src/poses.js",
   "src/presets.js",
   "src/render.js",

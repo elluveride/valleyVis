@@ -273,7 +273,7 @@ export function simulate(resolved, settings) {
       issues.push({ level: 'warn', stepId: '__park', msg: `The park route needs more than AutoBase's ${settings.match.parkTimeout} s, so the robot stops before it gets there.` });
     }
     if (park.edited) {
-      issues.push({ level: 'info', stepId: '__park', msg: 'The park route is edited here. Export Java → "Park route" and paste it into AutoPaths.java, or the robot keeps driving the old one.' });
+      issues.push({ level: 'info', stepId: '__park', msg: 'The park route is edited here. Export → "Park route" and paste it into AutoPaths.java, or the robot keeps driving the old one.' });
     }
   }
   const end = park ? park.t1 : cutAt;

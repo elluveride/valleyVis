@@ -559,7 +559,7 @@ function parkCard(app, d) {
     body.append(h('div.stat', { text: `${park.corridor} corridor · ${park.legs.length} leg${park.legs.length === 1 ? '' : 's'} · drive ${driving.toFixed(2)} s · AutoBase allows ${settings.match.parkTimeout} s` }));
   }
   if (P.edited) {
-    body.append(h('div.warnbox', { text: 'Edited. The robot only drives this after you paste the export into AutoPaths.java (Export Java → Park route). The exported version also starts from where the robot really is on red.' }));
+    body.append(h('div.warnbox', { text: 'Edited. The robot only drives this after you paste the export into AutoPaths.java (Export → Park route). The exported version also starts from where the robot really is on red.' }));
     body.append(h('div.add-row', {}, [
       h('button.small', { text: 'Show the Java', 'data-key': 'park.export', onclick: () => app.openExport('parkRoute') }),
       h('button.small', { text: 'Reset to team code', 'data-key': 'park.reset', onclick: () => store.updateSettings((st) => { st.park = cloneDeep(DEFAULT_SETTINGS.park); }) }),

@@ -22,7 +22,7 @@ python3 -m http.server 8000
 
 Then open <http://localhost:8000>. Any static host works, because ES modules need `http://`, not `file://`.
 
-**Live site:** <https://vcs-robotics.com> (custom domain set by the `CNAME` file; <https://elluveride.github.io/valleyVis/> redirects there). It is served from the `gh-pages` branch. Every push to `main` runs the tests and, if they pass, copies the commit to `gh-pages` (`.github/workflows/pages.yml`). You can also push a branch there directly with `git push origin HEAD:gh-pages`.
+**Live site:** <https://vis.vcs-robotics.com> (custom domain set by the `CNAME` file; <https://elluveride.github.io/valleyVis/> redirects there). It is served from the `gh-pages` branch. Every push to `main` runs the tests and, if they pass, copies the commit to `gh-pages` (`.github/workflows/pages.yml`). You can also push a branch there directly with `git push origin HEAD:gh-pages`.
 
 ## Using it
 
@@ -35,13 +35,13 @@ Then open <http://localhost:8000>. Any static host works, because ES modules nee
 | Run something while driving | In the path step, use *While driving* (whole path) or *Markers* (at a %). |
 | Mark a no-go area | Open the *Zones* tab, pick Rectangle/Circle/Polygon, draw it, then set the clearance. |
 | Check red | Use the Blue/Red toggle. You design in the blue frame, and red is previewed through `AutoPaths.RED` (`mirrorX(72).mirrorY(72)`). |
-| Get code | Click **Export Java**. |
+| Get code | Click **Export**. The tabs you will want are first: *Routine class*, *Blue/Red OpMode*, *Park route* and *Point array*; the rest sit under *Other formats*. |
 | Keep several autos | **Routines ▾** lists every routine saved in this browser. Edits save as you go, and each routine has its own undo history. Examples and opened files are added to the list; nothing is overwritten. |
 | Send a routine to a teammate | **Share** copies a link that holds the routine (optionally with your robot settings). Nothing is uploaded: the link itself is the data. Or use *Routines → Save this routine as a file* and commit the `.vvis.json`. |
 | End a path on a shared spot | Pick a **Named pose** in the path editor, or drag the path end near one and it snaps. Poses with Java (like `AutoPaths.xFlower(f)`) export as that expression. Edit the list in *Settings → Named points*. |
 | See what the robot is doing | While playing or scrubbing, the bottom-right of the field shows the current step and the commands running at that moment. |
 | Use it at a competition | After one visit the site works **offline**, and browsers offer to install it as an app. |
-| Change where the robot parks | Click the **Park** card (or the dashed park route, or the *park* block on the timeline). Drag the park pose, its heading knob, or a corridor corner, or type values. Then use *Export Java → Park route (AutoPaths)* and paste it into `AutoPaths.java`, because the park is shared by every auto. *Reset to team code* puts it back. |
+| Change where the robot parks | Click the **Park** card (or the dashed park route, or the *park* block on the timeline). Drag the park pose, its heading knob, or a corridor corner, or type values. Then use *Export → Park route (AutoPaths)* and paste it into `AutoPaths.java`, because the park is shared by every auto. *Reset to team code* puts it back. |
 | Measure a distance | Turn on **Ruler** (top-right of the field) and drag between two spots. Esc puts it away. |
 | See all shortcuts | Press **?**. |
 
@@ -51,6 +51,7 @@ Then open <http://localhost:8000>. Any static host works, because ES modules nee
 - **Routine class:** an abstract `XxxRoutine extends AutoBase` with its package and imports.
 - **Geometry class + Routine (uses Geometry):** the team's two-file layout. The Geometry class holds static poses and paths (like `UpGeometry`), and the routine follows them (like `UpRoutine`). Use these two instead of "Routine class" if you want that layout.
 - **Blue / Red OpModes:** `@Autonomous` subclasses that set `alliance()` and `target()`.
+- **Point array:** the routine as plain `(x, y, heading)` points: the poses you placed (optionally with curve control points) or points sampled every few inches along the drive with the time each is reached. Java `double[][]`, Java `Pose[]` built with `f.of` (so it mirrors for red by itself), CSV or JSON, in the blue frame or as red field coordinates, with or without the park route.
 - **Park route (AutoPaths):** a replacement for `park(f)` and `routeToPark(f, from, alliance)`. It drives the route as you edited it, starts from where the robot really is on red too, and skips legs too short for Pedro to follow.
 
 Markers export as `drive.follow(path).deadlineWith(Commands.sequence(Commands.waitUntil(() -> reached(segment, inchesLeft)), cmd))`. `reached` reads `follower.pathIndex()` and `follower.remainingDistance()`, and does not use `completion()`, because in Pedro 3.0.1 `completion()` mixes the current segment's t with the whole path on multi-segment paths. ValleyLib's scheduler runs subsystem `periodic()` (and so `follower.update()`) before commands, so the check always sees the current path.
@@ -119,6 +120,7 @@ Code map (`src/`):
 - `lint.js`: subsystem conflicts, naming, heading hand-offs between paths
 - `share.js`: share-link encoding
 - `poses.js`: named poses (snapping, tying a path end to a pose)
+- `points.js`: point-array export
 - `park.js`: the park route after the routine (team-code version, edited version, and its Java)
 - `store.js`: routine library, undo/redo, settings, saving to the browser
 - `render.js` / `interact.js`: canvas

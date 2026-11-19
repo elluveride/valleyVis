@@ -820,7 +820,7 @@ tests.offline = async (browser) => {
   await page.waitForFunction(() => !!window.valleyVis);
   const t = helpers(page);
   await page.evaluate(() => navigator.serviceWorker.ready);
-  await page.waitForFunction(async () => (await (await caches.open('valleyvis-v2')).keys()).length >= 30, null, { timeout: 15000 });
+  await page.waitForFunction(async () => (await (await caches.open('valleyvis-v3')).keys()).length >= 30, null, { timeout: 15000 });
   await t.example('solo');
   await page.waitForTimeout(500);
   // pull the plug
@@ -895,7 +895,7 @@ tests.parkEditing = async (browser, url) => {
   await page.locator('[data-key="park.x"]').press('Tab');
   check('park: the pose takes expressions', (await park()).pose.x === '144-L/2');
   // reminder + export
-  check('park: Problems reminds you to export it', (await t.issues()).some((i) => i.stepId === '__park' && /Export Java/.test(i.msg)));
+  check('park: Problems reminds you to export it', (await t.issues()).some((i) => i.stepId === '__park' && /Export → "Park route"/.test(i.msg)));
   await page.click('[data-key="park.export"]');
   const code = await page.locator('#exportOverlay pre.code').textContent();
   check('park: "Show the Java" opens the park export with the edited values', /double corridorX = blue\.x\(\) < 120\.0 \? 84\.0 : 110\.0;/.test(code) && /f\.of\(corridorX, 30\.0, 0\.0\)/.test(code), code.match(/double corridorX.*/)?.[0]);
@@ -926,6 +926,43 @@ tests.parkEditing = async (browser, url) => {
   await page.waitForFunction(() => !!window.valleyVis);
   check('park: edits persist across a reload', (await park()).middleX === 77 && (await park()).edited === true);
   check('park: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
+tests.pointArray = async (browser, url) => {
+  const page = await newPage(browser, url, { context: { permissions: ['clipboard-read', 'clipboard-write'] } });
+  const t = helpers(page);
+  await page.click('#btnExport');
+  check('export: opens on Routine class', (await page.locator('#exportOverlay .code-tabs button.on').innerText()) === 'Routine class');
+  const order = await page.locator('#exportOverlay .code-tabs button').allInnerTexts();
+  check('export: the team\'s exports come first', order.slice(0, 5).join('|') === 'Routine class|Blue OpMode|Red OpMode|Park route (AutoPaths)|Point array', order.join('|'));
+  await page.click('#exportOverlay [data-tab="points"]');
+  let code = await page.locator('#exportOverlay pre.code').textContent();
+  check('points: Java double[][] of the placed poses by default', /public static final double\[\]\[\] UP_VIS_ROUTINE_POINTS = \{/.test(code) && (code.match(/^\s+\{/gm) || []).length === 3, code.slice(0, 300));
+  await page.selectOption('[data-key="points.content"]', 'sampled');
+  await page.locator('[data-key="points.spacing"]').fill('6');
+  await page.locator('[data-key="points.spacing"]').press('Tab');
+  await page.selectOption('[data-key="points.format"]', 'csv');
+  code = await page.locator('#exportOverlay pre.code').textContent();
+  check('points: sampled CSV with times', code.startsWith('label,x,y,heading,seconds') && code.trim().split('\n').length > 20, code.slice(0, 120));
+  await page.click('#exportOverlay button:has-text("Copy")');
+  await page.waitForTimeout(80);
+  check('points: Copy copies what is shown', (await page.evaluate(() => navigator.clipboard.readText())) === code);
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#exportOverlay button:has-text("Download")')]);
+  check('points: Download names the file by format', dl.suggestedFilename() === 'UpVisRoutine-points.csv', dl.suggestedFilename());
+  await page.selectOption('[data-key="points.format"]', 'pose');
+  check('points: Pose[] locks the coordinates to the blue frame', await page.locator('[data-key="points.alliance"]').isDisabled());
+  // options are remembered
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await page.waitForFunction(() => !!window.valleyVis);
+  await page.click('#btnExport');
+  await page.click('#exportOverlay [data-tab="points"]');
+  check('points: options are remembered', (await page.locator('[data-key="points.format"]').inputValue()) === 'pose' && (await page.locator('[data-key="points.content"]').inputValue()) === 'sampled');
+  check('points: the other formats are still there', (await page.locator('#exportOverlay [data-tab="methods"]').count()) === 1 && (await page.locator('#exportOverlay [data-tab="geometryClass"]').count()) === 1);
+  check('points: no stray text in the options bar', !/null|undefined/.test(await page.locator('#exportOverlay .points-opts').innerText()));
+  check('points: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  void t;
   await page.context().close();
 };
 
