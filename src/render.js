@@ -3,6 +3,7 @@
 
 import { robotCorners, itemPoses } from './collision.js';
 import { completionAtTime } from './simulate.js';
+import { BALLS, viewFootprint } from './camera.js';
 
 export const PATH_COLORS = ['#facc15', '#22d3ee', '#a3e635', '#f472b6', '#c084fc', '#fb923c', '#34d399', '#f87171'];
 const ALLIANCE = { blue: '#3b82f6', red: '#ef4444' };
@@ -365,16 +366,102 @@ function drawPathStep(ctx, view, step, color, selected, settings, handles, pathP
 
 function drawFootprints(ctx, view, sim, settings) {
   ctx.save();
-  for (const item of sim.items) {
-    if (item.motion.kind === 'hold') continue;
+  const one = (item) => {
+    if (item.motion.kind === 'hold') return;
+    if (item.motion.kind === 'seq') { item.motion.parts.forEach(one); return; }
     const poses = itemPoses(item);
     const every = Math.max(1, Math.floor(poses.length / Math.max(1, (item.motion.geom?.length || 20) / 5)));
     poses.forEach((p, i) => {
       if (i % every) return;
       drawRobot(ctx, view, p, settings, { stroke: 'rgba(250, 204, 21, 0.18)', width: 1 });
     });
+  };
+  sim.items.forEach(one);
+  ctx.restore();
+}
+
+const VISION = '#22d3ee';
+
+/** What the camera can see from `pose` (a ball-height ground patch), drawn as a soft cone. */
+function drawCameraView(ctx, view, pose, settings, ball) {
+  const pts = viewFootprint(settings.camera, pose, ball.diameter);
+  if (pts.length < 3) return;
+  ctx.save();
+  ctx.fillStyle = 'rgba(34, 211, 238, 0.10)';
+  ctx.strokeStyle = 'rgba(34, 211, 238, 0.55)';
+  ctx.setLineDash([4, 3]);
+  ctx.lineWidth = 1;
+  poly(ctx, view, pts);
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+function ballColor(ball, alliance) {
+  return ball.name === 'pollen' ? '#facc15' : ALLIANCE[alliance];
+}
+
+function drawVisionStep(ctx, view, step, item, selected, settings, handles, labels, alliance, time) {
+  ctx.save();
+  if (step.area.length >= 3) {
+    ctx.fillStyle = selected ? 'rgba(34, 211, 238, 0.10)' : 'rgba(34, 211, 238, 0.05)';
+    ctx.strokeStyle = VISION;
+    ctx.lineWidth = selected ? 2 : 1.25;
+    ctx.setLineDash([6, 4]);
+    poly(ctx, view, step.area);
+    ctx.fill();
+    ctx.stroke();
   }
   ctx.restore();
+  const color = ballColor(step.ball, alliance);
+  const rBall = Math.max(3, (step.ball.diameter / 2) * view.k);
+  step.spots.forEach((sp, i) => {
+    const s = view.toScreen(sp);
+    const previewed = i === step.spotIndex;
+    ctx.save();
+    ctx.globalAlpha = previewed ? 1 : 0.55;
+    ctx.fillStyle = color;
+    ctx.strokeStyle = previewed ? '#ffffff' : '#0b0f17';
+    ctx.lineWidth = previewed ? 2 : 1;
+    ctx.beginPath();
+    ctx.arc(s.x, s.y, rBall, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    if (selected) handles.push({ kind: 'visionSpot', stepId: step.id, index: i, x: s.x, y: s.y, r: Math.max(8, rBall + 2) });
+  });
+  // the drive at the ball
+  const approach = step.plan.phases.find((ph) => ph.kind === 'approach');
+  if (approach) {
+    const a = view.toScreen(approach.from);
+    const b = view.toScreen(approach.to);
+    ctx.save();
+    ctx.strokeStyle = VISION;
+    ctx.lineWidth = selected ? 3 : 2.25;
+    ctx.setLineDash([2, 4]);
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    ctx.restore();
+  }
+  const sp = step.spots[step.spotIndex];
+  if (labels && sp) {
+    const s = view.toScreen(sp);
+    drawLabel(ctx, s, step.plan.found ? `${step.raw.name || 'pickup'}` : `${step.raw.name || 'pickup'}: not seen`, step.plan.found ? VISION : '#fbbf24');
+  }
+  if (selected) {
+    step.area.forEach((p, i) => {
+      const s = view.toScreen(p);
+      handle(ctx, s, 'square', VISION, 6);
+      handles.push({ kind: 'visionAreaVertex', stepId: step.id, index: i, x: s.x, y: s.y, r: 8 });
+    });
+    // what the camera sees: during the pickup, from the playback pose; otherwise from where it starts
+    const during = item && time >= item.t0 && time <= item.t1;
+    const pose = during ? null : step.start;
+    if (pose) drawCameraView(ctx, view, pose, settings, step.ball);
+  }
 }
 
 function drawPark(ctx, view, park, selected, settings, handles, pathPolys, labels) {
@@ -535,6 +622,11 @@ export function render(ctx, view, store, images, extra = {}) {
   drawPoints(ctx, view, d.resolved.points, ui.view.labels);
   if (ui.view.park || ui.selectedStepId === '__park') drawPark(ctx, view, d.sim.park, ui.selectedStepId === '__park', settings, handles, pathPolys, ui.view.labels);
   if (ui.view.footprints) drawFootprints(ctx, view, d.sim, settings);
+  for (const step of d.resolved.steps) {
+    if (step.type !== 'vision') continue;
+    const item = d.sim.items.find((it) => it.stepId === step.id);
+    drawVisionStep(ctx, view, step, item, step.id === ui.selectedStepId, settings, handles, ui.view.labels, ui.alliance, playback.time);
+  }
 
   let colorIdx = 0;
   const colors = {};
@@ -572,6 +664,13 @@ export function render(ctx, view, store, images, extra = {}) {
 
   // robot at playback time
   const pose = d.sim.poseAt(playback.time);
+  const active = d.sim.items.find((it) => it.type === 'vision' && playback.time >= it.t0 && playback.time <= it.t1);
+  const visionStep = active ? d.resolved.steps.find((st) => st.id === active.stepId) : null;
+  const selVision = selStep?.type === 'vision' ? selStep : null;
+  if (ui.view.camera || visionStep) {
+    const ball = (visionStep || selVision || d.resolved.steps.find((st) => st.type === 'vision'))?.ball || BALLS.pollen;
+    drawCameraView(ctx, view, pose, settings, ball);
+  }
   drawRobot(ctx, view, pose, settings, { stroke: '#ffffff', fill: `${allianceColor}66`, width: 2, nose: true });
   drawDraft(ctx, view, extra.draft, d.resolved.frame);
   ctx.restore();

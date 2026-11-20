@@ -14,6 +14,8 @@ const SECTIONS = [
     ['Click empty field', 'Deselect'],
     ['Ruler button, then drag', 'Measure a distance and direction'],
     ['Click the park route', 'Edit where the robot parks: drag the pose, its knob, or a corridor corner'],
+    ['Pickup step selected', 'Drag the ● ball to try other spots and the ■ corners to change the search area; right-click removes one'],
+    ['Camera button', 'Show what the HuskyLens can see from the robot at the playhead'],
   ]],
   ['Keyboard', [
     ['Space', 'Play / pause'],
@@ -33,6 +35,7 @@ const SECTIONS = [
     ['Routines', 'Every routine is saved in this browser as you edit. Use Share for a link, or save a file to keep in the repo.'],
     ['Problems tab', 'Lists anything that would crash on the robot, hit a keep-out zone, or run past the timeout.'],
     ['Timing', 'Times are estimates. Tune Settings → Motion against a stopwatch.'],
+    ['Pickups', 'A pickup finds a ball with the HuskyLens: it looks, turns toward the search area if nothing is in view, then drives at the ball. Practice spots are only for the preview. Check the camera numbers with the HuskyLensCheck OpMode (Export → Vision setup) before trusting it.'],
   ]],
 ];
 

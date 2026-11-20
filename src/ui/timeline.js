@@ -9,6 +9,7 @@ function stepColor(step, item, pathIdx) {
   if (step.type === 'action') return item?.spans?.[0]?.color || '#ef4444';
   if (step.type === 'turn') return '#c084fc';
   if (step.type === 'wait') return '#64748b';
+  if (step.type === 'vision') return '#22d3ee';
   return '#94a3b8';
 }
 
@@ -59,7 +60,7 @@ export function createTimeline(container, app) {
     const d = store.derived();
     const { settings, project, ui } = store.state;
     const { sim } = d;
-    scale = Math.max(sim.routineTotal, sim.end, settings.match.autoLength) * 1.03 || 30;
+    scale = Math.max(sim.routineTotal, sim.worstTotal ?? 0, sim.end, settings.match.autoLength) * 1.03 || 30;
     rowA.replaceChildren();
     rowB.replaceChildren();
     let pathIdx = 0;
@@ -81,9 +82,17 @@ export function createTimeline(container, app) {
       for (const sp of item.spans || []) {
         if (sp.kind === 'action') continue;
         rowB.append(h('div.blk', {
-          title: `${sp.name} · ${sp.t0.toFixed(2)}–${sp.t1.toFixed(2)} s${sp.kind === 'marker' ? ` (marker at ${Math.round(sp.at * 100)}%)` : ' (during path)'}`,
+          title: `${sp.name} · ${sp.t0.toFixed(2)}–${sp.t1.toFixed(2)} s${sp.kind === 'marker' ? ` (marker at ${Math.round(sp.at * 100)}%)` : step.type === 'vision' ? ' (during pickup)' : ' (during path)'}`,
           style: { left: pct(sp.t0), width: pct(Math.max(0.02, sp.t1 - sp.t0)), background: sp.color },
         }, sp.t1 - sp.t0 > 0.8 ? sp.name : ''));
+      }
+      if (step.type === 'vision' && item.worstT1 > item.t1 + 0.05) {
+        // a thin strip under the steps, so the park and parallel commands never hide it
+        rowA.append(h('div.blk.worst', {
+          'data-step': step.id,
+          title: `If no ball is found (or the drive is slow) this pickup can run until ${item.worstT1.toFixed(2)} s and push everything after it back by ${(item.worstT1 - item.t1).toFixed(2)} s`,
+          style: { left: pct(item.t1), width: pct(item.worstT1 - item.t1) },
+        }));
       }
     });
     if (sim.park) {
@@ -101,6 +110,7 @@ export function createTimeline(container, app) {
     budget.replaceChildren(
       'routine ', h(`b${over ? '.over' : ''}`, { text: `${sim.routineTotal.toFixed(2)} s` }), ` / ${settings.match.routineTimeout} s · auto ends `,
       h(`b${late ? '.over' : ''}`, { text: `${sim.end.toFixed(2)} s` }), ` / ${settings.match.autoLength} s`,
+      ...(sim.worstTotal > sim.routineTotal + 0.05 ? [' · worst-case routine ', h(`b${sim.worstTotal > settings.match.routineTimeout ? '.over' : ''}`, { text: `${sim.worstTotal.toFixed(2)} s` })] : []),
     );
     tick();
   }

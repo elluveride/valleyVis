@@ -108,6 +108,23 @@ function step(s) {
       return { id, type: 'turn', h: val(s.h, 0) };
     case 'java':
       return { id, type: 'java', code: str(s.code), duration: val(s.duration, 0) };
+    case 'vision': {
+      const area = (Array.isArray(s.area) ? s.area : []).filter(isObj).map((p) => point(p));
+      const spots = (Array.isArray(s.spots) ? s.spots : []).filter(isObj).map((p) => point(p));
+      const spot = Number.isInteger(s.spot) && s.spot >= 0 && s.spot < spots.length ? s.spot : 0;
+      return {
+        id, type: 'vision', name: str(s.name, 'pickup'), label: str(s.label),
+        target: s.target === 'nectar' ? 'nectar' : 'pollen',
+        area: area.length >= 3 ? area : [{ x: 60, y: 60 }, { x: 84, y: 60 }, { x: 84, y: 84 }, { x: 60, y: 84 }],
+        spots: spots.length ? spots : [{ x: 72, y: 72 }],
+        spot,
+        reach: val(s.reach, 'L/2'),
+        maxSpeed: optVal(s.maxSpeed),
+        timeout: val(s.timeout, 4),
+        scan: val(s.scan, 60),
+        during: (Array.isArray(s.during) ? s.during : []).map(cmdRef).filter(Boolean),
+      };
+    }
     default:
       return null;
   }
@@ -203,14 +220,35 @@ export function normalizeSettings(raw) {
     }
   }
   s.commands = uniqueIds(s.commands.map(command).filter(Boolean), 'cmd');
-  // the park pose may be a number or an expression; conform() only keeps the default's type
-  const rp = isObj(raw) && isObj(raw.park) && isObj(raw.park.pose) ? raw.park.pose : {};
+  // the park pose and middle corridor may be numbers or expressions; conform() only keeps the default's type
+  const rawPark = isObj(raw) && isObj(raw.park) ? raw.park : {};
+  const rp = isObj(rawPark.pose) ? rawPark.pose : {};
   const dp = DEFAULT_SETTINGS.park.pose;
   s.park.pose = { x: val(rp.x, dp.x), y: val(rp.y, dp.y), h: val(rp.h, dp.h) };
+  s.park.middleX = val(rawPark.middleX, DEFAULT_SETTINGS.park.middleX);
+  s.park.firstLegSpeed = rawPark.firstLegSpeed === null ? null : isNum(rawPark.firstLegSpeed) && rawPark.firstLegSpeed > 0 ? rawPark.firstLegSpeed : DEFAULT_SETTINGS.park.firstLegSpeed;
+  if (!s.park.edited) {
+    // not edited means "the team code", whatever an older version of this app thought that was
+    s.park = cloneDeep(DEFAULT_SETTINGS.park);
+  } else if (savedVersion !== null && savedVersion < 3) {
+    // an edit made before the middle corridor had two x values or the first leg had a speed cap:
+    // keep the route the team exported back then
+    s.park.middleEndX = isNum(rawPark.middleX) ? rawPark.middleX : s.park.middleEndX;
+    s.park.firstLegSpeed = null;
+  }
   s.robot.length = Math.max(0.5, s.robot.length);
   s.robot.width = Math.max(0.5, s.robot.width);
   s.field.plusX = oneOf(s.field.plusX, ['up', 'right', 'down', 'left'], 'up');
   s.field.customImagePlusX = oneOf(s.field.customImagePlusX, ['up', 'right', 'down', 'left'], 'up');
+  const cam = s.camera;
+  cam.hfov = Math.min(170, Math.max(5, cam.hfov));
+  cam.vfov = Math.min(170, Math.max(5, cam.vfov));
+  cam.height = Math.max(0, cam.height);
+  cam.minArea = Math.max(1, cam.minArea);
+  cam.lookTime = Math.max(0, cam.lookTime);
+  cam.commitDistance = Math.max(0, cam.commitDistance);
+  cam.reaimDistance = Math.max(0.5, cam.reaimDistance);
+  for (const k of ['idPollen', 'idNectarRed', 'idNectarBlue']) cam[k] = Math.max(1, Math.round(cam[k]));
   s.alliance.redTransform = oneOf(s.alliance.redTransform, ['point', 'mirrorX', 'mirrorY', 'none'], 'point');
   return s;
 }

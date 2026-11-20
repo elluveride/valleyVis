@@ -61,6 +61,7 @@ export function createStore() {
         footprints: savedUi.view?.footprints === true,
         park: savedUi.view?.park !== false,
         labels: savedUi.view?.labels !== false,
+        camera: savedUi.view?.camera === true,
       },
       selectedStepId: null,
       selectedZoneId: null,

@@ -230,7 +230,7 @@ test('settings saved before named poses existed gain the team poses once', () =>
   old.points = [{ name: 'Blue audience cell', x: 84, y: 66 }, { name: 'My spot', x: 10, y: 10 }];
   const migrated = normalizeSettings(old);
   assert.deepEqual(migrated.points.map((p) => p.name), ['Blue audience cell', 'My spot', 'xFlower', 'yFlower', 'park']);
-  assert.equal(migrated.version, 2);
+  assert.equal(migrated.version, DEFAULT_SETTINGS.version);
   // someone who deleted a pose on purpose does not get it back
   const current = JSON.parse(JSON.stringify(DEFAULT_SETTINGS));
   current.points = current.points.filter((p) => p.name !== 'park');

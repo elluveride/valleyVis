@@ -133,6 +133,7 @@ input[type="color"] { padding: 0; width: 28px; height: 24px; }
 .strip .blk.sel { box-shadow: 0 0 0 2px var(--accent) inset; }
 .strip .blk.cut { background-image: repeating-linear-gradient(45deg, rgba(0,0,0,.45) 0 6px, transparent 6px 12px) !important; opacity: 0.55; }
 .strip .blk.zero { min-width: 3px; padding: 0; }
+.strip .blk.worst { top: auto; bottom: 0; height: 7px; padding: 0; z-index: 2; background: repeating-linear-gradient(45deg, rgba(34,211,238,.9) 0 4px, rgba(34,211,238,.25) 4px 8px); border: 0; border-radius: 0 3px 3px 0; }
 .strip .line { position: absolute; top: 0; bottom: 0; width: 2px; }
 .strip .line.timeout { background: var(--err); }
 .strip .line.auto { background: var(--muted); }

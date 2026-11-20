@@ -173,6 +173,42 @@ function actionItem(step, pose, t0) {
   return { item: { stepId: step.id, index: step.index, type: 'action', t0, t1, forever, motion: { kind: 'hold', pose: { ...pose } }, spans }, pose };
 }
 
+/** A vision pickup: look, turn and scan, then drive at the ball (see vision.js), as timed parts. */
+function visionItem(step, pose, t0, settings) {
+  const motion = settings.motion;
+  const cam = settings.camera;
+  const turnRate = deg2rad(Math.max(1, motion.turnRate));
+  const parts = [];
+  let t = t0;
+  for (const ph of step.plan.phases) {
+    if (ph.kind === 'look') {
+      const dur = ph.timed ? Math.max(0, cam.lookTime) : 0;
+      parts.push({ t0: t, t1: t + dur, motion: { kind: 'hold', pose: { ...ph.pose } } });
+      t += dur;
+    } else if (ph.kind === 'turn') {
+      const moveDur = Math.abs(ph.delta) / turnRate;
+      const dur = moveDur + (ph.settle ? motion.settle : 0);
+      parts.push({ t0: t, t1: t + dur, motion: { kind: 'turn', from: { ...ph.from }, delta: ph.delta, moveDur } });
+      t += dur;
+    } else {
+      const geom = buildPath([[{ x: ph.from.x, y: ph.from.y }, { x: ph.to.x, y: ph.to.y }]]);
+      // facing the ball; with no reach that is undefined at the end, so VisionPickupCmd holds the heading
+      const interp = step.reach >= 1 ? makeInterpolator({ k: 'facing', p: ph.target }, geom) : makeInterpolator({ k: 'constant', h: ph.to.h }, geom);
+      const prof = profilePath(geom, interp, motion, step.maxSpeed ?? 1);
+      const dur = prof.duration + motion.settle;
+      parts.push({ t0: t, t1: t + dur, motion: { kind: 'path', geom, interp, prof } });
+      t += dur;
+    }
+  }
+  const natural = t - t0;
+  const cut = natural > step.timeout;
+  const t1 = t0 + Math.min(natural, step.timeout);
+  const item = { stepId: step.id, index: step.index, type: 'vision', t0, t1, worstT1: t0 + step.timeout, cut, found: step.plan.found, motion: { kind: 'seq', parts }, spans: [] };
+  for (const c of step.during) item.spans.push({ name: c.name, color: c.color, t0, t1: Number.isFinite(c.duration) ? Math.min(t1, t0 + c.duration) : t1, kind: 'during' });
+  const endPose = motionPose(item, t1);
+  return { item, pose: { x: endPose.x, y: endPose.y, h: endPose.h } };
+}
+
 function holdItem(step, pose, t0, dur) {
   return { item: { stepId: step.id, index: step.index, type: step.type, t0, t1: t0 + dur, motion: { kind: 'hold', pose: { ...pose } }, spans: [] }, pose };
 }
@@ -184,10 +220,10 @@ export function parkLegs(from, alliance, settings) {
 
 function parkPlan(fromPose, t0, settings, alliance) {
   const plan = planPark(fromPose, alliance, settings);
-  const legs = plan.pairs.map(([a, b]) => {
+  const legs = plan.pairs.map(([a, b], i) => {
     const geom = buildPath([[{ x: a.x, y: a.y }, { x: b.x, y: b.y }]]);
     const interp = makeInterpolator({ k: 'linear', a: a.h, b: b.h }, geom);
-    const prof = profilePath(geom, interp, settings.motion, 1);
+    const prof = profilePath(geom, interp, settings.motion, plan.speeds?.[i] ?? 1);
     return { geom, interp, prof, from: a, to: b };
   });
   let t = t0;
@@ -202,6 +238,10 @@ function parkPlan(fromPose, t0, settings, alliance) {
 
 function motionPose(item, t) {
   const m = item.motion;
+  if (m.kind === 'seq') {
+    const part = m.parts.find((p) => t < p.t1) || m.parts[m.parts.length - 1];
+    return part ? motionPose(part, Math.max(part.t0, Math.min(t, part.t1))) : { ...item.motion.parts?.[0]?.motion?.pose };
+  }
   const tau = t - item.t0;
   if (m.kind === 'path') {
     const s = completionAtTime(m.prof, Math.min(tau, m.prof.duration));
@@ -234,6 +274,7 @@ export function simulate(resolved, settings) {
     if (step.type === 'path') r = pathItem(step, pose, t, settings);
     else if (step.type === 'turn') r = turnItem(step, pose, t, settings);
     else if (step.type === 'action') r = actionItem(step, pose, t);
+    else if (step.type === 'vision') r = visionItem(step, pose, t, settings);
     else if (step.type === 'wait') r = holdItem(step, pose, t, step.seconds);
     else r = holdItem(step, pose, t, step.duration);
     items.push(r.item);
@@ -248,6 +289,16 @@ export function simulate(resolved, settings) {
     t = r.item.t1;
   }
   const routineTotal = t;
+  // pickups can take their whole timeout (nothing seen, or a slow approach)
+  const worstExtra = items.reduce((a, it) => a + (it.type === 'vision' ? Math.max(0, it.worstT1 - it.t1) : 0), 0);
+  const worstTotal = routineTotal + worstExtra;
+  if (worstExtra > 0 && worstTotal > settings.match.routineTimeout + 1e-9 && routineTotal <= settings.match.routineTimeout) {
+    const first = items.find((it) => it.type === 'vision' && it.worstT1 > it.t1);
+    issues.push({ level: 'warn', stepId: first?.stepId ?? null, msg: `If the pickups take their full timeout, the routine runs ${worstTotal.toFixed(2)} s and AutoBase cuts it at ${settings.match.routineTimeout} s.` });
+  }
+  if (items.some((it) => it.type === 'vision') && !settings.camera.calibrated) {
+    issues.push({ level: 'info', stepId: items.find((it) => it.type === 'vision').stepId, msg: 'The camera numbers in Settings → Camera have not been checked yet (the HuskyLens field of view is not published). Run the HuskyLensCheck OpMode from Export → Vision setup, then tick "checked".' });
+  }
   const timeout = settings.match.routineTimeout;
   const enforce = settings.match.enforceTimeout !== false;
   const cutAt = enforce ? Math.min(routineTotal, timeout) : routineTotal;
@@ -266,7 +317,7 @@ export function simulate(resolved, settings) {
     const from = routinePoseAt(cutAt);
     park = parkPlan(from, cutAt, settings, resolved.alliance);
     if (park.jump > 1) {
-      issues.push({ level: 'warn', stepId: '__park', msg: `AutoBase park route starts ${park.jump.toFixed(1)} in away from the robot (AutoPaths.routeToPark builds its first leg from a re-mirrored pose on ${resolved.alliance}). Editing the park here and exporting it fixes this.` });
+      issues.push({ level: 'warn', stepId: '__park', msg: `The park route starts ${park.jump.toFixed(1)} in away from the robot.` });
     }
     for (const msg of park.errors) issues.push({ level: 'error', stepId: '__park', msg });
     if (park.cut) {
@@ -294,5 +345,5 @@ export function simulate(resolved, settings) {
     if (!item) return { phase: 'done', item: null, spans: [] };
     return { phase: 'routine', item, spans: (item.spans || []).filter((sp) => tt >= sp.t0 && tt < sp.t1) };
   };
-  return { items, routineTotal, cutAt, park, end, poseAt, activeAt, issues };
+  return { items, routineTotal, worstTotal, cutAt, park, end, poseAt, activeAt, issues };
 }

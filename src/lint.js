@@ -26,6 +26,13 @@ export function lintProject(project, resolved) {
       }
       if (step.cmds.some((c) => !c.ok)) issues.push({ level: 'error', stepId: step.id, msg: 'Uses a command that is not in the command library (Settings → Commands).' });
     }
+    if (step.type === 'vision') {
+      const pickup = { name: 'the pickup', requires: ['drive', 'husky'] };
+      for (const c of requirementConflicts(step.during, [pickup])) {
+        issues.push({ level: 'warn', stepId: step.id, msg: `Commands running during the pickup fight over a subsystem: ${c}.` });
+      }
+      if (step.during.some((c) => !c.ok)) issues.push({ level: 'error', stepId: step.id, msg: 'Uses a command that is not in the command library (Settings → Commands).' });
+    }
     if (step.type === 'path') {
       const follow = { name: 'the path follow', requires: ['drive'] };
       const all = [...step.during, ...step.markers.map((m) => m.cmd)];

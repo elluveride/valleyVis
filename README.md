@@ -41,6 +41,7 @@ Then open <http://localhost:8000>. Any static host works, because ES modules nee
 | End a path on a shared spot | Pick a **Named pose** in the path editor, or drag the path end near one and it snaps. Poses with Java (like `AutoPaths.xFlower(f)`) export as that expression. Edit the list in *Settings → Named points*. |
 | See what the robot is doing | While playing or scrubbing, the bottom-right of the field shows the current step and the commands running at that moment. |
 | Use it at a competition | After one visit the site works **offline**, and browsers offer to install it as an app. |
+| Pick up a ball it finds itself | Add a **+ Pickup** step. The robot looks with a HuskyLens, turns toward the search area if nothing is in view, then drives at the nearest ball of that color and stops with it at the intake. Drag the ● practice spot to see how it behaves with the ball in different places (the robot goes wherever the real ball is), and the ■ corners to set where balls count. Paths after a pickup are built from wherever the robot ended up. See *HuskyLens pickups* below. |
 | Change where the robot parks | Click the **Park** card (or the dashed park route, or the *park* block on the timeline). Drag the park pose, its heading knob, or a corridor corner, or type values. Then use *Export → Park route (AutoPaths)* and paste it into `AutoPaths.java`, because the park is shared by every auto. *Reset to team code* puts it back. |
 | Measure a distance | Turn on **Ruler** (top-right of the field) and drag between two spots. Esc puts it away. |
 | See all shortcuts | Press **?**. |
@@ -52,9 +53,18 @@ Then open <http://localhost:8000>. Any static host works, because ES modules nee
 - **Geometry class + Routine (uses Geometry):** the team's two-file layout. The Geometry class holds static poses and paths (like `UpGeometry`), and the routine follows them (like `UpRoutine`). Use these two instead of "Routine class" if you want that layout.
 - **Blue / Red OpModes:** `@Autonomous` subclasses that set `alliance()` and `target()`.
 - **Point array:** the routine as plain `(x, y, heading)` points: the poses you placed (optionally with curve control points) or points sampled every few inches along the drive with the time each is reached. Java `double[][]`, Java `Pose[]` built with `f.of` (so it mirrors for red by itself), CSV or JSON, in the blue frame or as red field coordinates, with or without the park route.
-- **Park route (AutoPaths):** a replacement for `park(f)` and `routeToPark(f, from, alliance)`. It drives the route as you edited it, starts from where the robot really is on red too, and skips legs too short for Pedro to follow.
+- **Park route (AutoPaths):** a replacement for `park(f)` and `routeToPark(f, from, alliance)`. It drives the route as you edited it and skips legs too short for Pedro to follow. Until you edit it, the park card shows the team's own `routeToPark` (commit 3ce19d4, Nov 17): across to the corridor at 75% speed, down it holding the heading, then in.
+- **Vision setup:** the files a pickup step needs, added once: `HuskyCamera` (pixel → field maths, the same as the preview), `HuskyLensSubsystem`, `VisionPickupCmd`, a `HuskyLensCheck` TeleOp, plus lines for `Constants.java` and `Subsystems.java`. It moves up next to the main exports once the routine has a pickup.
 
 Markers export as `drive.follow(path).deadlineWith(Commands.sequence(Commands.waitUntil(() -> reached(segment, inchesLeft)), cmd))`. `reached` reads `follower.pathIndex()` and `follower.remainingDistance()`, and does not use `completion()`, because in Pedro 3.0.1 `completion()` mixes the current segment's t with the whole path on multi-segment paths. ValleyLib's scheduler runs subsystem `periodic()` (and so `follower.update()`) before commands, so the check always sees the current path.
+
+### HuskyLens pickups
+
+- **Which camera:** the original DFRobot HuskyLens (SEN0305). The BIOBUZZ manual allows it by name (R702, Example 5) and the FTC SDK has a driver for it (`com.qualcomm.hardware.dfrobot.HuskyLens`). It plugs into an I2C port and is set up as a "HuskyLens" device in the robot configuration. The HuskyLens 2 is not covered by that rule or the SDK.
+- **Setting it up:** teach each ball color in *Color Recognition* (pollen is yellow; nectar is your alliance color) and enter the IDs in *Settings → Camera*, along with where the lens is on the robot. DFRobot does not publish the field of view, so run **HuskyLensCheck**: put a ball at known spots and use the dpad to adjust tilt and field of view until the numbers on the Driver Station match. Copy them back into Settings and tick *checked*.
+- **What the robot does:** it looks along its heading; if nothing is there it turns toward the search area in steps (looking the whole time), then sweeps the other way. Once it sees a ball of the right color inside the search area, it drives at it nose-first and stops `reach` short of it (half the robot length by default, so the ball is at the bumper). It re-aims if the ball turns out to be somewhere else until the last few inches, where the ball drops out of view. It ignores the other alliance's nectar and anything outside the area.
+- **Timing:** the timeline shows how long the preview took and, hatched, how long it could take if it has to give up (the step's timeout). The Problems tab warns if that worst case would run past AutoBase's 20 s.
+- **No ball sensor yet:** the pickup ends when the robot reaches the ball. If you add a sensor later, type its check (for example `subsystems.intake.hasBall()`) in *Settings → Camera → Ball-in check* and the pickup also ends as soon as it is true.
 
 ### Field frame
 
@@ -66,6 +76,7 @@ The bundled image is drawn with Pedro **+x up** and **+y left**, with the origin
 - **Timing is an estimate.** It uses a trapezoid profile with a curvature speed cap, and it is not Foresight's controller. Top speed does follow Pedro's mecanum model (fast nose-first, slower strafing, slowest on diagonals). Tune *Settings → Motion* against a stopwatch.
 - **Command timing follows ValleyLib's rules.** A timeout ends a step at whichever comes first, a parallel group waits for its slowest command, and commands running during a path are cut when the path ends.
 - **Timeouts are simulated** like `AutoBase`: the routine is cut at 20 s, then `AutoPaths.routeToPark` runs for up to 9.75 s.
+- **Pickups use the same camera maths as the robot.** The preview and `HuskyCamera` share one projection, and the vision backtest below runs the exported `VisionPickupCmd` against a simulated robot and camera to check it ends where the preview said. The preview still only knows where you *expect* the ball to be, and its accuracy depends on the camera numbers you measured.
 
 ## Things Pedro 3.0.1 does that the tool handles for you
 
@@ -88,10 +99,16 @@ These were found by running exported code against the real library (see *Backtes
 3. builds every routine for both alliances the way the follower would, and compares what happened with what the Problems tab predicted;
 4. compiles the exported park route and runs it from hundreds of end poses on both alliances, comparing every leg with the preview.
 
-The last full run covered 1,000 routines (2,000 builds): every "this will throw" and "this is fine" prediction matched. It needs a JDK, Node, Python 3, git, curl and unzip:
+The last full run covered 1,000 routines (2,000 builds): every "this will throw" and "this is fine" prediction matched. The park check also compiles the team's own `routeToPark` (3ce19d4) and confirms the unedited park card matches it leg for leg. It needs a JDK, Node, Python 3, git, curl and unzip:
 
 ```bash
 tests/backtest/run.sh
+```
+
+`tests/backtest/vision/run.sh` does the same for pickups. It compiles the Vision setup files and routines with pickups against Pedro 3.0.1 and ValleyLib 2.0.0, with stand-ins for the FTC SDK 12.0.0 classes they use (same signatures, checked with `javap`). Then it runs `VisionPickupCmd` closed-loop on a simulated robot whose camera renders the ball into whole pixels, and compares each run with the preview. On 1,000 random scenarios (random camera mounts, ball spots, scans, the other alliance's nectar in view), the found/not-found verdict matched every time, the end pose was within 0.93 in, and the time within 0.16 s.
+
+```bash
+tests/backtest/vision/run.sh
 ```
 
 ## Development
@@ -122,6 +139,9 @@ Code map (`src/`):
 - `poses.js`: named poses (snapping, tying a path end to a pose)
 - `points.js`: point-array export
 - `park.js`: the park route after the routine (team-code version, edited version, and its Java)
+- `camera.js`: HuskyLens projection (pixel ↔ field), what it can see, scan headings
+- `vision.js`: plans a pickup the way `VisionPickupCmd` runs it
+- `visionJava.js`: the Vision setup Java files
 - `store.js`: routine library, undo/redo, settings, saving to the browser
 - `render.js` / `interact.js`: canvas
 - `ui/`: panels and dialogs

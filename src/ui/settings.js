@@ -1,4 +1,4 @@
-// Settings page: robot constants, motion estimates, match timing, field view, constants,
+// Settings page: robot constants, motion estimates, match timing, field view, camera, constants,
 // named points, the command library, and Java export options. Saved in this browser.
 
 import { cloneDeep, DEFAULT_COMMANDS } from '../defaults.js';
@@ -10,6 +10,7 @@ const SECTIONS = [
   ['motion', 'Motion'],
   ['match', 'Match timing'],
   ['field', 'Field view'],
+  ['camera', 'Camera (HuskyLens)'],
   ['constants', 'Constants'],
   ['points', 'Named points'],
   ['commands', 'Commands'],
@@ -202,6 +203,41 @@ export function createSettingsPage(overlay, app) {
     ];
   }
 
+  function camera(s) {
+    const c = s.camera;
+    const cn = (key, label, k, opts = {}) => num(`cam.${key}`, label, c[k], (st, v) => { st.camera[k] = v; }, opts);
+    return [
+      h('p.hint', { text: 'The original HuskyLens (DFRobot SEN0305): the BIOBUZZ manual allows it by name (R702) and the FTC SDK drives it on an I2C port. Position is from the robot centre: x forward, y left. Export → Vision setup turns these into Constants.HUSKY_* lines.' }),
+      h('div.form-grid', {}, [
+        fld('Device name (robot config)', textInput(app, 'set.cam.dn', c.deviceName, set((st, v) => { st.camera.deviceName = v; }), { mono: true })),
+        cn('x', 'Forward of centre x (in)', 'x', { step: 0.25 }),
+        cn('y', 'Left of centre y (in)', 'y', { step: 0.25 }),
+        cn('ht', 'Lens height off the tiles (in)', 'height', { step: 0.25, min: 0 }),
+        cn('yaw', 'Turned left (°)', 'yaw', { step: 1 }),
+        cn('pitch', 'Tilted down (°)', 'pitch', { step: 1 }),
+        cn('hf', 'Horizontal field of view (°)', 'hfov', { step: 1, min: 5, max: 170 }),
+        cn('vf', 'Vertical field of view (°)', 'vfov', { step: 1, min: 5, max: 170 }),
+      ]),
+      checkbox('set.cam.cal', 'Checked on the robot with HuskyLensCheck (the field of view is not published for this camera, so measure it)', c.calibrated, (v) => store.updateSettings((st) => { st.camera.calibrated = v; })),
+      h('h3', { text: 'Color IDs' }),
+      h('p.hint', { text: 'Teach each ball color on the HuskyLens (Color Recognition) and enter the ID it gets. Nectar uses your alliance\'s ID.' }),
+      h('div.form-grid', {}, [
+        cn('ip', 'Pollen (yellow) ID', 'idPollen', { step: 1, min: 1 }),
+        cn('inr', 'Red nectar ID', 'idNectarRed', { step: 1, min: 1 }),
+        cn('inb', 'Blue nectar ID', 'idNectarBlue', { step: 1, min: 1 }),
+      ]),
+      h('h3', { text: 'Pickup behaviour' }),
+      h('div.form-grid', {}, [
+        cn('ma', 'Smallest blob (px², of 320 × 240)', 'minArea', { step: 1, min: 1, title: 'Blobs smaller than this are ignored. It also sets how far away a ball can be seen.' }),
+        cn('lt', 'Look time per heading (s)', 'lookTime', { step: 0.05, min: 0 }),
+        cn('cd', 'Stop re-aiming within (in)', 'commitDistance', { step: 0.5, min: 0, title: 'Close to the ball it drops out of the bottom of the image; from here the robot drives to its last estimate.' }),
+        cn('rd', 'Re-plan if the ball moves (in)', 'reaimDistance', { step: 0.5, min: 0.5 }),
+      ]),
+      fld('Ball-in check (Java, optional)', textInput(app, 'set.cam.bi', c.ballInJava, set((st, v) => { st.camera.ballInJava = v; }), { mono: true, placeholder: 'e.g. intake.hasBall()' })),
+      h('p.hint', { text: 'Leave blank for now: without a sensor the pickup ends when the robot reaches the ball. If you add one later, type the boolean here and the pickup also ends as soon as it is true.' }),
+    ];
+  }
+
   function code(s) {
     const t = (key, label, k) => fld(label, textInput(app, `set.code.${key}`, s.code[k], set((st, v) => { st.code[k] = v; }), { mono: true }));
     return [
@@ -221,6 +257,9 @@ export function createSettingsPage(overlay, app) {
         t('tt', 'Turn command ({drive}, {heading} radians)', 'turnTemplate'),
         t('ti', 'Turn command imports', 'turnImports'),
         t('xi', 'Other classes your Java mentions (comma separated)', 'extraImports'),
+        t('vp', 'Vision package (HuskyLens files)', 'visionPackage'),
+        t('hu', 'HuskyLens subsystem expression', 'husky'),
+        t('gi', 'GoToCmd import (paths after a pickup)', 'goToImport'),
       ]),
     ];
   }
@@ -252,7 +291,7 @@ export function createSettingsPage(overlay, app) {
     ];
   }
 
-  const builders = { robot, motion, match, field, constants, points, commands, code, data };
+  const builders = { robot, motion, match, field, camera, constants, points, commands, code, data };
 
   function rerender() {
     const s = store.state.settings;

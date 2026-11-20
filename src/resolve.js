@@ -4,6 +4,9 @@
 import { evalValue } from './expr.js';
 import { bezierDerivative, buildPath, deg2rad, normAngle } from './geometry.js';
 import { makeInterpolator, validatePiecewise } from './heading.js';
+import { BALLS } from './camera.js';
+import { pointInPoly } from './collision.js';
+import { planPickup } from './vision.js';
 
 export function symbolTable(settings) {
   const values = { L: settings.robot.length, W: settings.robot.width };
@@ -202,6 +205,36 @@ function resolvePath(step, ctx) {
   return { type: 'path', id: step.id, raw: step, start, end: endPose, segPts, geom, interp, desc, maxSpeed, timeout, during, markers, issues };
 }
 
+function resolveVision(step, ctx) {
+  const { ev, frame, settings } = ctx;
+  const cam = settings.camera;
+  const issues = [];
+  const start = { ...ctx.pose };
+  const pt = (p, what) => frame.point(ev(p.x, `${what} x`, step.id), ev(p.y, `${what} y`, step.id));
+  const area = (step.area || []).map((p, i) => pt(p, `Search area corner ${i + 1}`));
+  const spots = (step.spots || []).map((p, i) => pt(p, `Practice spot ${i + 1}`));
+  const spotIndex = Math.min(Math.max(0, step.spot || 0), Math.max(0, spots.length - 1));
+  const reach = Math.max(0, ev(step.reach ?? 'L/2', 'Reach', step.id));
+  const scanDeg = Math.max(0, ev(step.scan ?? 60, 'Scan', step.id));
+  const timeout = Math.max(0.1, ev(step.timeout ?? 4, 'Timeout', step.id));
+  const speedRaw = step.maxSpeed === null || step.maxSpeed === undefined || step.maxSpeed === '' ? null : ev(step.maxSpeed, 'Max speed', step.id);
+  if (speedRaw !== null && !(speedRaw > 0)) issues.push({ level: 'error', stepId: step.id, throws: true, msg: 'Max speed must be greater than 0 (ValleyLib throws IllegalArgumentException). Leave it blank for full speed.' });
+  const maxSpeed = speedRaw !== null && speedRaw > 0 ? speedRaw : null;
+  const during = (step.during || []).map((r) => resolveCommand(r, settings, ev, step.id));
+  const ball = BALLS[step.target] || BALLS.pollen;
+  if (!(cam.height > ball.diameter / 2)) {
+    issues.push({ level: 'error', stepId: step.id, msg: `The camera is set ${cam.height} in off the tiles, below the middle of a ${ball.name} ball, so it can never see one on the floor. Check Settings → Camera.` });
+  }
+  spots.forEach((sp, i) => {
+    if (area.length >= 3 && !pointInPoly(sp, area)) issues.push({ level: 'warn', stepId: step.id, msg: `Practice spot ${i + 1} is outside the search area, so the robot would ignore a ball there.` });
+  });
+  const plan = planPickup({ start, spot: spots[spotIndex], area, target: step.target, reach, scanDeg }, cam);
+  if (plan.inArea && !plan.found) {
+    issues.push({ level: 'warn', stepId: step.id, msg: `From where this step starts, the camera never sees practice spot ${spotIndex + 1}, even after scanning ±${scanDeg}°. The robot would scan and then move on without it.` });
+  }
+  return { type: 'vision', id: step.id, raw: step, start, area, spots, spotIndex, reach, scanDeg, timeout, maxSpeed, during, ball, plan, end: plan.end, issues };
+}
+
 function resolveZone(z, frame, ev, mirrorActive) {
   const map = mirrorActive && z.mirror ? frame.point : (x, y) => ({ x, y });
   const n = (v, w) => ev(v, `Zone "${z.name}" ${w}`, null);
@@ -241,6 +274,9 @@ export function resolveProject(project, settings, alliance = 'blue') {
     } else if (step.type === 'turn') {
       const h = frame.heading(deg2rad(ev(step.h ?? 0, 'Turn heading', step.id)));
       r = { type: 'turn', id: step.id, raw: step, start: { ...pose }, end: { ...pose, h }, issues: [] };
+      pose = { ...r.end };
+    } else if (step.type === 'vision') {
+      r = resolveVision(step, ctx);
       pose = { ...r.end };
     } else if (step.type === 'wait') {
       r = { type: 'wait', id: step.id, raw: step, seconds: Math.max(0, ev(step.seconds ?? 0, 'Wait', step.id)), pose: { ...pose }, issues: [] };

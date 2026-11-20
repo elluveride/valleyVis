@@ -32,9 +32,12 @@ test('java identifiers are sanitised', () => {
 test('Up preset exports the same shape as UpRoutine/UpGeometry', () => {
   const out = gen(PRESETS.find((p) => p.id === 'up').make());
   assert.match(out.methods, /return field\(\)\.of\(72\.0 \+ Constants\.ROBOT_LENGTH \/ 2\.0, 144\.0 - Constants\.ROBOT_WIDTH \/ 2\.0, -90\.0\);/);
-  assert.match(out.methods, /Path toGarden = Paths\.curve\(start, f\.of\(108\.0, 120\.0, 0\.0\), intakeFromGarden\)/);
+  // UpGeometry at team commit 3ce19d4: middleGarden and laterGarden are the control points
+  assert.match(out.methods, /Path toGarden = Paths\.curve\(start, f\.of\(90\.0, 110\.0, 0\.0\), f\.of\(120\.0, 144\.0 - Constants\.ROBOT_WIDTH \/ 2\.0, 0\.0\), intakeFromGarden\)/);
+  assert.match(out.methods, /Pose intakeFromGarden = f\.of\(140\.0 - Constants\.ROBOT_LENGTH \/ 2\.0, 144\.0 - Constants\.ROBOT_WIDTH \/ 2\.0, 0\.0\);/);
+  assert.match(out.methods, /Pose readyToShoot = f\.of\(90\.0, 126\.0, -90\.0\);/);
   assert.match(out.methods, /\.until\(0\.2, Interpolator\.constant\(start\)\)/);
-  assert.match(out.methods, /b\.command\(subsystems\.drive\.follow\(toGarden\)\s+\.deadlineWith\(\s+CommandFactory\.intakeAndTransfer\(subsystems\.intake, subsystems\.transfer\)\)\);/);
+  assert.match(out.methods, /b\.command\(subsystems\.drive\.follow\(toGarden\)\s+\.withTimeout\(6\.0\)\s+\.deadlineWith\(\s+CommandFactory\.intakeAndTransfer\(subsystems\.intake, subsystems\.transfer\)\)\);/);
   assert.match(out.methods, /b\.follow\(readyShoot1\);/);
   assert.match(out.methods, /b\.doInstant\(\(\) -> \{\n\s+subsystems\.pollen\.shoot\(\);\n\s+\}\);/);
   assert.match(out.methods, /new ShootCmd\(subsystems\.intake, subsystems\.pollen, subsystems\.transfer, 4000\)/);
@@ -100,12 +103,12 @@ test('team layout: a Geometry class of static poses and paths, and a routine tha
   assert.match(g, /^package org\.firstinspires\.ftc\.team2844simple\.autos\.geometries;/);
   assert.match(g, /public final class UpVisGeometry \{\n    private UpVisGeometry\(\) \{\}/);
   assert.match(g, /public static Pose startingPose\(PoseFactory f\) \{\n        return f\.of\(72\.0 \+ Constants\.ROBOT_LENGTH \/ 2\.0, 144\.0 - Constants\.ROBOT_WIDTH \/ 2\.0, -90\.0\);/);
-  assert.match(g, /public static Path toGarden\(PoseFactory f\) \{\n        Pose start = startingPose\(f\);\n        Pose intakeFromGarden = intakeFromGarden\(f\);\n        return Paths\.curve\(start, f\.of\(108\.0, 120\.0, 0\.0\), intakeFromGarden\)/);
+  assert.match(g, /public static Path toGarden\(PoseFactory f\) \{\n        Pose start = startingPose\(f\);\n        Pose intakeFromGarden = intakeFromGarden\(f\);\n        return Paths\.curve\(start, f\.of\(90\.0, 110\.0, 0\.0\), f\.of\(120\.0, 144\.0 - Constants\.ROBOT_WIDTH \/ 2\.0, 0\.0\), intakeFromGarden\)/);
   assert.doesNotMatch(g, /Command|PedroAutoDsl|ShootCmd/, 'no routine code or imports leak into the geometry file');
   const r = up.teamRoutineClass;
   assert.match(r, /import org\.firstinspires\.ftc\.team2844simple\.autos\.geometries\.UpVisGeometry;/);
   assert.match(r, /return UpVisGeometry\.startingPose\(field\(\)\);/);
-  assert.match(r, /subsystems\.drive\.follow\(UpVisGeometry\.toGarden\(f\)\)\s+\.deadlineWith\(/);
+  assert.match(r, /subsystems\.drive\.follow\(UpVisGeometry\.toGarden\(f\)\)\s+\.withTimeout\(6\.0\)\s+\.deadlineWith\(/);
   assert.match(r, /b\.follow\(UpVisGeometry\.readyShoot1\(f\)\);/);
   assert.doesNotMatch(r, /Paths\.|Interpolator/, 'no path building in the routine file');
   assert.ok(balanced(g) && balanced(r));

@@ -119,6 +119,13 @@ export function attachInteractions(canvas, app) {
           if (isLast) delete s.endRef;
         }
       }, { history: false });
+    } else if (h.kind === 'visionAreaVertex' || h.kind === 'visionSpot') {
+      const d = toDesign(real, e);
+      store.update((pr) => {
+        const s = findStep(pr, h.stepId);
+        if (!s) return;
+        if (h.kind === 'visionSpot') { s.spots[h.index] = { x: d.x, y: d.y }; s.spot = h.index; } else s.area[h.index] = { x: d.x, y: d.y };
+      }, { history: false });
     } else if (h.kind === 'parkPose' || h.kind === 'parkCorner' || h.kind === 'parkHeading') {
       const d = toDesign(real, e);
       const park = store.derived().sim.park;
@@ -131,7 +138,7 @@ export function attachInteractions(canvas, app) {
           const last = park?.legs[park.legs.length - 1];
           if (last) st.park.pose.h = headingDeg(last.to, real, e);
         } else {
-          if (h.corridor === 'middle') st.park.middleX = d.x; else st.park.outerX = d.x;
+          if (h.corridor === 'middle') st.park.middleEndX = d.x; else st.park.outerX = d.x;
           st.park.approachY = d.y;
         }
       }, { source: 'canvas' });
@@ -373,6 +380,16 @@ export function attachInteractions(canvas, app) {
       });
     } else if (h.kind === 'marker') {
       store.update((pr) => { findStep(pr, h.stepId).markers.splice(h.marker, 1); });
+    } else if (h.kind === 'visionAreaVertex') {
+      store.update((pr) => {
+        const s = findStep(pr, h.stepId);
+        if (s.area.length > 3) s.area.splice(h.index, 1);
+      });
+    } else if (h.kind === 'visionSpot') {
+      store.update((pr) => {
+        const s = findStep(pr, h.stepId);
+        if (s.spots.length > 1) { s.spots.splice(h.index, 1); s.spot = Math.min(s.spot || 0, s.spots.length - 1); }
+      });
     }
   });
 

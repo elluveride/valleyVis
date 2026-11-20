@@ -1,7 +1,7 @@
 // Defaults seeded from Team2844_Season2026/team2844simple (Constants.java, PedroConstants.java,
 // commands/, AutoBase.java). Everything here is editable on the Settings page.
 
-export const SETTINGS_VERSION = 2; // 2: named points can carry a heading and Java
+export const SETTINGS_VERSION = 3; // 2: named points can carry a heading and Java; 3: park matches AutoPaths of Nov 17
 
 const TEAM = 'org.firstinspires.ftc.team2844simple';
 
@@ -116,16 +116,40 @@ export const DEFAULT_SETTINGS = {
     wallTolerance: 0.5, // in the robot may poke past a wall before it's flagged
   },
   park: {
-    // AutoPaths.routeToPark. false = exactly the team code (red-alliance bug included);
-    // any edit switches to the exported replacement in src/park.js.
+    // AutoPaths.routeToPark as the team code has it (commit 3ce19d4, Nov 17 2026). false = exactly
+    // the team code; any edit switches to the exported replacement in src/park.js.
     edited: false,
     middleMaxX: 96, // blue frame: a robot that ends with x below this uses the middle corridor
-    middleX: 84, // middle corridor x
+    middleX: '72+W/2', // middle corridor: the x the first leg drives to (straight along y)
+    middleEndX: 84, // middle corridor: its x at the approach line
     outerX: 120, // outer corridor x
     approachY: 24, // the corridor is driven down to this y, then the robot goes in to the park pose
-    corridorH: -90, // heading reached by the end of the first leg
+    corridorH: 0, // heading reached by the end of the first leg
     approachH: 0, // heading reached at the end of the corridor
+    firstLegSpeed: 0.75, // fraction of top speed for the drive to the corridor (null = full speed)
     pose: { x: '144-L/2', y: 24, h: 180 }, // AutoPaths.park(f)
+  },
+  camera: {
+    // HuskyLens (original, SEN0305): the one the BIOBUZZ manual names (R702) and the FTC SDK drives.
+    // Robot frame: x forward, y left, from the robot's centre. Export → Vision setup writes these
+    // as Constants.HUSKY_* lines.
+    deviceName: 'huskylens',
+    x: 7, // in forward of the robot centre
+    y: 0, // in left of the robot centre
+    height: 9, // in from the tiles to the lens
+    yaw: 0, // deg the camera is turned left of straight ahead
+    pitch: 25, // deg the camera is tilted down
+    hfov: 60, // deg horizontal field of view: not published for this camera, measure it
+    vfov: 45, // deg vertical field of view: same
+    calibrated: false, // set once the numbers have been checked with the HuskyLensCheck OpMode
+    idPollen: 1, // color IDs as learned on the HuskyLens
+    idNectarRed: 2,
+    idNectarBlue: 3,
+    minArea: 100, // px² (about 10 x 10): smaller blobs are ignored, which also limits how far it can see
+    lookTime: 0.3, // s to look at each heading before turning to the next one
+    commitDistance: 12, // in: closer than this, stop re-aiming (the ball drops out of view)
+    reaimDistance: 3, // in: re-plan the approach if the ball's position moves more than this
+    ballInJava: '', // optional Java that is true once a ball is in (for a future sensor)
   },
   field: {
     image: 'assets/field-biobuzz.webp',
@@ -155,6 +179,9 @@ export const DEFAULT_SETTINGS = {
     poseFactory: 'field()',
     turnTemplate: 'new TurnToCmd({drive}, {heading})',
     turnImports: `${TEAM}.commands.drive.TurnToCmd`,
+    visionPackage: `${TEAM}.vision`, // where the generated HuskyLens files go
+    husky: 'subsystems.husky', // the HuskyLens subsystem, once added to Subsystems.java
+    goToImport: `${TEAM}.commands.drive.GoToCmd`, // follows a path built when it starts (after a pickup)
     extraImports: `${TEAM}.autos.AutoPaths`, // one per line; only added when the class is actually used
     blueAlliance: 'Constants.BLUE_ALLIANCE',
     redAlliance: 'Constants.RED_ALLIANCE',

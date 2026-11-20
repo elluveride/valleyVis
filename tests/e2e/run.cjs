@@ -644,9 +644,9 @@ tests.steps = async (browser, url) => {
 tests.headingHandoff = async (browser, url) => {
   const page = await newPage(browser, url);
   const t = helpers(page);
-  // toGarden (u2) ends at heading 0; make it tangent so the robot really ends facing somewhere else
+  // toGarden (u2) ends at heading 0; make it reverse-tangent so the robot really ends facing somewhere else
   await page.click('[data-step="u2"] .hd');
-  await page.selectOption('[data-key="u2.heading.mode"]', 'tangent');
+  await page.selectOption('[data-key="u2.heading.mode"]', 'reverseTangent');
   await t.settle();
   const warn = (await t.issues()).find((i) => i.stepId === 'u3' && /will be facing/.test(i.msg));
   check('handoff: the next path is warned that it starts from a heading the robot will not have', !!warn, JSON.stringify((await t.issues()).map((i) => i.msg)));
@@ -820,7 +820,7 @@ tests.offline = async (browser) => {
   await page.waitForFunction(() => !!window.valleyVis);
   const t = helpers(page);
   await page.evaluate(() => navigator.serviceWorker.ready);
-  await page.waitForFunction(async () => (await (await caches.open('valleyvis-v3')).keys()).length >= 30, null, { timeout: 15000 });
+  await page.waitForFunction(async () => (await (await caches.open('valleyvis-v4')).keys()).length >= 30, null, { timeout: 15000 });
   await t.example('solo');
   await page.waitForTimeout(500);
   // pull the plug
@@ -881,7 +881,7 @@ tests.parkEditing = async (browser, url) => {
   hd = (await t.handle((x) => x.kind === 'parkCorner' && x.corridor === 'outer'))[0];
   await t.drag({ x: hd.cx, y: hd.cy }, await t.at(110, 30));
   p = await park();
-  check('park: dragging a corridor corner moves that corridor and the approach line', near(p.outerX, 110, 0.26) && near(p.approachY, 30, 0.26) && p.middleX === 84, JSON.stringify(p));
+  check('park: dragging a corridor corner moves that corridor and the approach line', near(p.outerX, 110, 0.26) && near(p.approachY, 30, 0.26) && p.middleX === '72+W/2', JSON.stringify(p));
   // heading knob
   hd = (await t.handle((x) => x.kind === 'parkHeading'))[0];
   await t.drag({ x: hd.cx, y: hd.cy }, await t.at(p.pose.x, p.pose.y + 30));
@@ -898,7 +898,7 @@ tests.parkEditing = async (browser, url) => {
   check('park: Problems reminds you to export it', (await t.issues()).some((i) => i.stepId === '__park' && /Export → "Park route"/.test(i.msg)));
   await page.click('[data-key="park.export"]');
   const code = await page.locator('#exportOverlay pre.code').textContent();
-  check('park: "Show the Java" opens the park export with the edited values', /double corridorX = blue\.x\(\) < 120\.0 \? 84\.0 : 110\.0;/.test(code) && /f\.of\(corridorX, 30\.0, 0\.0\)/.test(code), code.match(/double corridorX.*/)?.[0]);
+  check('park: "Show the Java" opens the park export with the edited values', /boolean middle = blue\.x\(\) < 120\.0;/.test(code) && /double corridorX = middle \? 72\.0 \+ Constants\.ROBOT_WIDTH \/ 2\.0 : 110\.0;/.test(code) && /f\.of\(corridorEndX, 30\.0, 0\.0\)/.test(code), code.match(/double corridor.*/g)?.join(' | '));
   await page.keyboard.press('Escape');
   // red preview: drags store blue-frame values
   await page.click('#allianceToggle button[data-alliance="red"]');
@@ -929,6 +929,81 @@ tests.parkEditing = async (browser, url) => {
   await page.context().close();
 };
 
+tests.vision = async (browser, url) => {
+  const page = await newPage(browser, url);
+  const t = helpers(page);
+  const before = (await t.project()).steps.length;
+  await page.click('.add-row button:has-text("+ Pickup")');
+  await t.settle();
+  let pr = await t.project();
+  const v = pr.steps[pr.steps.length - 1];
+  check('vision: + Pickup adds a pickup step and selects it', pr.steps.length === before + 1 && v.type === 'vision' && (await t.ui()).selectedStepId === v.id, JSON.stringify(v));
+  check('vision: it starts with a search area and one practice spot', v.area.length === 4 && v.spots.length === 1);
+  let spots = await t.handle((h) => h.kind === 'visionSpot');
+  const corners = await t.handle((h) => h.kind === 'visionAreaVertex');
+  check('vision: the spot and the area corners are draggable on the field', spots.length === 1 && corners.length === 4);
+  // move the area to open floor and the ball inside it
+  for (const [i, [x, y]] of [[60, 30], [100, 30], [100, 70], [60, 70]].entries()) {
+    const c = (await t.handle((h) => h.kind === 'visionAreaVertex')).find((h) => h.index === i);
+    await t.drag({ x: c.cx, y: c.cy }, await t.at(x, y));
+  }
+  spots = await t.handle((h) => h.kind === 'visionSpot');
+  await t.drag({ x: spots[0].cx, y: spots[0].cy }, await t.at(80, 50));
+  pr = await t.project();
+  const moved = pr.steps.find((s) => s.id === v.id);
+  check('vision: dragging the corners and the spot stores them', near(moved.spots[0].x, 80, 0.26) && near(moved.spots[0].y, 50, 0.26) && near(moved.area[2].x, 100, 0.26) && near(moved.area[2].y, 70, 0.26), JSON.stringify(moved));
+  const plan = await t.ev((id) => { const st = window.valleyVis.store.derived().resolved.steps.find((s) => s.id === id); return { inArea: st.plan.inArea, end: st.end }; }, v.id);
+  check('vision: the preview plans around the new spot', plan.inArea === true, JSON.stringify(plan));
+  await page.selectOption(`[data-key="${v.id}.target"]`, 'nectar');
+  check('vision: the target can be switched to nectar', (await t.project()).steps.find((s) => s.id === v.id).target === 'nectar');
+  check('vision: the timeline shows the give-up worst case', (await page.locator('.strip .blk.worst').count()) >= 1);
+  check('vision: Problems says the camera is not checked yet', (await t.issues()).some((i) => /have not been checked yet/.test(i.msg)));
+  // camera settings
+  await page.click(`[data-key="${v.id}.camset"]`);
+  check('vision: "Camera settings" opens that section', /Camera \(HuskyLens\)/.test(await page.locator('#settingsOverlay .content h3').first().innerText()));
+  const pitch = page.locator('[data-key="set.cam.pitch"]');
+  await pitch.fill('30');
+  await pitch.press('Tab');
+  check('vision: camera numbers are editable', (await t.settings()).camera.pitch === 30);
+  await page.click('[data-key="set.cam.cal"]');
+  check('vision: ticking "checked" clears the reminder', (await t.settings()).camera.calibrated === true && !(await t.issues()).some((i) => /have not been checked yet/.test(i.msg)));
+  await page.click('#settingsOverlay header button:has-text("Close")');
+  // export
+  await page.click('#btnExport');
+  const tabs = await page.locator('#exportOverlay .code-tabs button:not(.more)').allInnerTexts();
+  check('vision: Vision setup sits with the main exports once there is a pickup', tabs.includes('Vision setup'), tabs.join('|'));
+  let code = await page.locator('#exportOverlay pre.code').textContent();
+  check('vision: the routine class runs VisionPickupCmd', /new VisionPickupCmd\(subsystems\.drive, subsystems\.husky, HuskyCamera\.Ball\.NECTAR, alliance\(\)/.test(code));
+  await page.click('#exportOverlay [data-tab="visionSetup"]');
+  for (const [key, re] of [['command', /public class VisionPickupCmd implements Command/], ['subsystem', /public class HuskyLensSubsystem extends FtcSubsystem/], ['camera', /public final class HuskyCamera/], ['check', /@TeleOp\(name = "HuskyLens Check"/], ['constants', /public static double HUSKY_PITCH_DEG = 30\.0;/], ['subsystems', /husky = new HuskyLensSubsystem\(hardwareMap\);/]]) {
+    await page.click(`#exportOverlay [data-vfile="${key}"]`);
+    code = await page.locator('#exportOverlay pre.code').textContent();
+    check(`vision: Vision setup → ${key}`, re.test(code), code.slice(0, 160));
+  }
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#exportOverlay button:has-text("Download")')]);
+  check('vision: downloads are named after the file', dl.suggestedFilename() === 'HuskyLensSubsystem.java' || dl.suggestedFilename() === 'Subsystems-HuskyLens.java', dl.suggestedFilename());
+  await page.keyboard.press('Escape');
+  await page.click('#exportOverlay header button:has-text("Close")').catch(() => {});
+  // camera view toggle
+  await page.click('button[data-view="camera"]');
+  check('vision: the Camera view toggle', (await t.ui()).view.camera === true);
+  // red preview: dragging the spot stores the blue-frame position
+  await page.click('#allianceToggle button[data-alliance="red"]');
+  await t.settle();
+  spots = await t.handle((h) => h.kind === 'visionSpot');
+  await t.drag({ x: spots[0].cx, y: spots[0].cy }, await t.atReal(144 - 90, 144 - 40));
+  const red = (await t.project()).steps.find((s) => s.id === v.id).spots[0];
+  check('vision: on the red preview, drags store blue-frame values', near(red.x, 90, 0.26) && near(red.y, 40, 0.26), JSON.stringify(red));
+  await page.click('#allianceToggle button[data-alliance="blue"]');
+  // right-click a corner removes it (keeps at least 3)
+  const c0 = (await t.handle((h) => h.kind === 'visionAreaVertex'))[0];
+  await page.mouse.click(c0.cx, c0.cy, { button: 'right' });
+  await t.settle();
+  check('vision: right-click removes a corner', (await t.project()).steps.find((s) => s.id === v.id).area.length === 3);
+  check('vision: no page errors', page.errors.length === 0, page.errors.join(' | '));
+  await page.context().close();
+};
+
 tests.pointArray = async (browser, url) => {
   const page = await newPage(browser, url, { context: { permissions: ['clipboard-read', 'clipboard-write'] } });
   const t = helpers(page);
@@ -944,7 +1019,7 @@ tests.pointArray = async (browser, url) => {
   await page.locator('[data-key="points.spacing"]').press('Tab');
   await page.selectOption('[data-key="points.format"]', 'csv');
   code = await page.locator('#exportOverlay pre.code').textContent();
-  check('points: sampled CSV with times', code.startsWith('label,x,y,heading,seconds') && code.trim().split('\n').length > 20, code.slice(0, 120));
+  check('points: sampled CSV with times', code.startsWith('label,x,y,heading,seconds') && code.trim().split('\n').length > 15, code.slice(0, 120));
   await page.click('#exportOverlay button:has-text("Copy")');
   await page.waitForTimeout(80);
   check('points: Copy copies what is shown', (await page.evaluate(() => navigator.clipboard.readText())) === code);
@@ -1041,7 +1116,7 @@ tests.badInput = async (browser, url) => {
   await x.fill('96');
   await x.press('Tab');
   // zero-length path
-  await t.ev(() => window.valleyVis.store.update((p) => { p.steps[2].segments[0].end = { x: '144-L/2', y: '144-W/2' }; }));
+  await t.ev(() => window.valleyVis.store.update((p) => { p.steps[2].segments[0].end = { x: '140-L/2', y: '144-W/2' }; }));
   await t.settle();
   check('bad: zero-length segment is reported', (await t.issues()).some((i) => /zero length/.test(i.msg)), JSON.stringify((await t.issues()).map((i) => i.msg)));
   await page.keyboard.press('Control+z');

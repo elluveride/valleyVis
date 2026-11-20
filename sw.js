@@ -1,6 +1,6 @@
 // Offline support. Network first, so an online visit always gets the newest files; the cache
 // is only used when the network is down or too slow (competition venues, captive portals).
-const CACHE = 'valleyvis-v3';
+const CACHE = 'valleyvis-v4';
 const SHELL = [
   "./",
   "assets/field-biobuzz.webp",
@@ -9,6 +9,7 @@ const SHELL = [
   "assets/icon.svg",
   "index.html",
   "manifest.webmanifest",
+  "src/camera.js",
   "src/codegen.js",
   "src/collision.js",
   "src/defaults.js",
@@ -38,6 +39,8 @@ const SHELL = [
   "src/ui/timeline.js",
   "src/ui/zones.js",
   "src/util.js",
+  "src/vision.js",
+  "src/visionJava.js",
   "styles.css"
 ];
 const SLOW_MS = 3500;

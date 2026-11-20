@@ -1,8 +1,9 @@
 // The route AutoBase drives after the routine: AutoPaths.routeToPark.
 //
-// Until you change something it is simulated exactly as the team code has it, red-alliance
-// bug included. Once edited, it is simulated the way the exported replacement drives it
-// (decided in the blue frame, first leg from where the robot really is, tiny legs skipped).
+// Until you change something it is simulated exactly as the team code has it (commit 3ce19d4):
+// straight along y to the corridor at 75% speed, down the corridor holding the heading, then in
+// to park(f). Once edited, it is simulated the way the exported replacement drives it (the same
+// route from your numbers, with legs too short to follow skipped).
 
 import { evalValue, fmtNum, javaValue } from './expr.js';
 import { makeFrame, symbolTable } from './resolve.js';
@@ -27,8 +28,10 @@ export function parkParams(settings) {
   return {
     edited: !!p.edited,
     middleMaxX: p.middleMaxX,
-    middleX: p.middleX,
+    middleX: number(p.middleX, scope, 72 + settings.robot.width / 2, 'middle corridor x', errors),
+    middleEndX: p.middleEndX,
     outerX: p.outerX,
+    firstLegSpeed: p.firstLegSpeed > 0 ? p.firstLegSpeed : null,
     approachY: p.approachY,
     corridorH: p.corridorH,
     approachH: p.approachH,
@@ -45,7 +48,7 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
 /**
  * The legs of the park route from the robot's pose `from` (field frame, radians).
- * Returns { pairs: [[fromPose, toPose], ...], corridor, corners, threshold, jump }.
+ * Returns { pairs: [[fromPose, toPose], ...], speeds: [cap or null per leg], corridor, corners, threshold, jump }.
  */
 export function planPark(from, alliance, settings) {
   const P = parkParams(settings);
@@ -55,36 +58,38 @@ export function planPark(from, alliance, settings) {
   const blue = alliance === 'red' ? frame.pose(from.x, from.y, (from.h * 180) / Math.PI) : { ...from };
   const park = f(P.pose.x, P.pose.y, P.pose.h);
   const corners = {
-    middle: frame.point(P.middleX, P.approachY),
+    middle: frame.point(P.middleEndX, P.approachY),
     outer: frame.point(P.outerX, P.approachY),
   };
   const threshold = [frame.point(P.middleMaxX, 0), frame.point(P.middleMaxX, 144)];
-
-  if (!P.edited) {
-    // AutoPaths.routeToPark exactly as it is today. On red it starts from the re-mirrored pose
-    // and compares the real x against 96, so the first leg begins away from the robot.
-    const start = blue;
-    const inMiddle = alliance === 'red' ? from.x > P.middleMaxX : from.x < P.middleMaxX;
-    const cx = inMiddle ? P.middleX : P.outerX;
-    const correctX = f(cx, from.y, P.corridorH);
-    const correctY = f(cx, P.approachY, P.approachH);
-    const pairs = [[start, correctX], [correctX, correctY], [correctY, park]];
-    return { pairs, corridor: inMiddle ? 'middle' : 'outer', corners, threshold, jump: dist(start, from), params: P };
-  }
-
+  // inMiddle(): blue x below 96 (red: field x above 48), so red mirrors blue
   const corridor = blue.x < P.middleMaxX ? 'middle' : 'outer';
   const cx = corridor === 'middle' ? P.middleX : P.outerX;
-  const stops = [f(cx, blue.y, P.corridorH), f(cx, P.approachY, P.approachH), park];
-  const pairs = [];
-  let last = { ...from };
-  for (const stop of stops) {
-    if (dist(last, stop) < MIN_LEG) continue;
-    pairs.push([last, stop]);
-    last = stop;
+  const ex = corridor === 'middle' ? P.middleEndX : P.outerX;
+  // correctX keeps the robot's y (f.of(...).withY(from.y())); correctY is on the approach line
+  const stops = [f(cx, blue.y, P.corridorH), f(ex, P.approachY, P.approachH), park];
+  const caps = [P.firstLegSpeed, null, null];
+
+  if (!P.edited) {
+    // AutoPaths.routeToPark exactly as it is: three legs, always
+    return { pairs: [[{ ...from }, stops[0]], [stops[0], stops[1]], [stops[1], park]], speeds: caps, corridor, corners, threshold, jump: 0, params: P };
   }
+
+  const pairs = [];
+  const speeds = [];
+  let last = { ...from };
+  stops.forEach((stop, i) => {
+    if (dist(last, stop) < MIN_LEG) return;
+    pairs.push([last, stop]);
+    speeds.push(caps[i]);
+    last = stop;
+  });
   // already parked: Pedro still needs a path, so the export nudges a hair onto the park pose
-  if (!pairs.length) pairs.push([{ ...from }, { ...park, x: park.x + 0.01 }]);
-  return { pairs, corridor, corners, threshold, jump: 0, params: P };
+  if (!pairs.length) {
+    pairs.push([{ ...from }, { ...park, x: park.x + 0.01 }]);
+    speeds.push(null);
+  }
+  return { pairs, speeds, corridor, corners, threshold, jump: 0, params: P };
 }
 
 /** Java to paste into AutoPaths.java in place of park(f) and routeToPark(f, from, alliance). */
@@ -93,6 +98,7 @@ export function parkJava(settings) {
   const java = symbolTable(settings).java;
   const n = (v) => fmtNum(Number(v));
   const pose = `f.of(${javaValue(P.pose.x, java)}, ${javaValue(P.pose.y, java)}, ${javaValue(P.pose.h, java)})`;
+  const cap = P.firstLegSpeed > 0 ? n(P.firstLegSpeed) : null;
   return [
     '// ----- ValleyVis: park route -----',
     '// Paste into AutoPaths.java in place of park(PoseFactory) and',
@@ -112,19 +118,27 @@ export function parkJava(settings) {
     '    public static Path routeToPark(PoseFactory f, Supplier<Pose> from, int alliance) {',
     '        Pose here = from.get();',
     '        Pose blue = normalized(here, alliance);',
-    `        double corridorX = blue.x() < ${n(P.middleMaxX)} ? ${n(P.middleX)} : ${n(P.outerX)};`,
+    `        boolean middle = blue.x() < ${n(P.middleMaxX)};`,
+    `        double corridorX = middle ? ${javaValue(P.middleX, java)} : ${n(P.outerX)};`,
+    `        double corridorEndX = middle ? ${n(P.middleEndX)} : ${n(P.outerX)};`,
     '        Pose[] stops = {',
     `                f.of(corridorX, blue.y(), ${n(P.corridorH)}),`,
-    `                f.of(corridorX, ${n(P.approachY)}, ${n(P.approachH)}),`,
+    `                f.of(corridorEndX, ${n(P.approachY)}, ${n(P.approachH)}),`,
     '                park(f),',
     '        };',
     '        Path[] legs = new Path[stops.length];',
     '        int count = 0;',
     '        Pose last = here;',
-    '        for (Pose stop : stops) {',
-    `            if (last.distance(stop) < ${n(MIN_LEG)}) continue;`,
-    '            legs[count++] = lineLinearHeading(last, stop);',
-    '            last = stop;',
+    '        for (int i = 0; i < stops.length; i++) {',
+    `            if (last.distance(stops[i]) < ${n(MIN_LEG)}) continue;`,
+    ...(cap
+      ? [
+        '            Path leg = lineLinearHeading(last, stops[i]);',
+        `            // the drive to the corridor runs at ${Math.round(Number(P.firstLegSpeed) * 100)}% speed`,
+        `            legs[count++] = i == 0 ? leg.with(PedroConstants.foresightConfig.maxPathSpeed.at(${cap})) : leg;`,
+      ]
+      : ['            legs[count++] = lineLinearHeading(last, stops[i]);']),
+    '            last = stops[i];',
     '        }',
     '        if (count == 0) {',
     '            // already parked: Pedro still needs a path, so nudge a hair onto the park pose',

@@ -157,7 +157,7 @@ const app = {
     const r = store.resolvedBlue();
     const pose = index <= 0 ? r.start : (() => {
       const s = r.steps[Math.min(index, r.steps.length) - 1];
-      return s.type === 'path' || s.type === 'turn' ? s.end : s.pose;
+      return s.type === 'path' || s.type === 'turn' || s.type === 'vision' ? s.end : s.pose;
     })();
     return { x: pose.x, y: pose.y, hDeg: displayDeg(pose.h) };
   },
@@ -177,6 +177,7 @@ const settingsPage = createSettingsPage($('settingsOverlay'), app);
 const exportDialog = createExportDialog($('exportOverlay'), app);
 const help = createHelp($('helpOverlay'));
 app.openExport = (tab) => exportDialog.open(tab);
+app.openSettings = (sec) => settingsPage.open(sec);
 interactions = attachInteractions(canvas, app);
 
 /* ---------- sidebar ---------- */
@@ -305,7 +306,7 @@ $('btnHelp').addEventListener('click', () => help.open());
 const viewToggles = $('viewToggles');
 function renderViewToggles() {
   const v = store.state.ui.view;
-  const items = [['footprints', 'Footprints'], ['park', 'Park route'], ['labels', 'Labels']];
+  const items = [['footprints', 'Footprints'], ['park', 'Park route'], ['camera', 'Camera'], ['labels', 'Labels']];
   const measuring = store.state.ui.tool === 'measure';
   viewToggles.replaceChildren(
     h(`button${measuring ? '.on' : ''}`, { text: 'Ruler', title: 'Measure a distance on the field', 'data-view': 'ruler', onclick: () => { interactions.cancelDraft(); store.setUi({ tool: measuring ? 'select' : 'measure' }); } }),

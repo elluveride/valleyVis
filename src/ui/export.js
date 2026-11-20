@@ -2,6 +2,7 @@
 
 import { generateJava } from '../codegen.js';
 import { POINT_DEFAULTS, pointArray } from '../points.js';
+import { VISION_FILES } from '../visionJava.js';
 import { copyText, download, h, safeStorage, toast } from '../util.js';
 
 // the ones the team uses first; the rest stay available under "Other formats"
@@ -17,7 +18,17 @@ const MORE_TABS = [
   ['geometryClass', 'Geometry class', 'Team layout, file 1 of 2: static poses and paths, like UpGeometry. Goes in the geometries package.'],
   ['teamRoutineClass', 'Routine (uses Geometry)', 'Team layout, file 2 of 2: the routine that follows the Geometry paths, like UpRoutine. Use this instead of "Routine class".'],
 ];
-const ALL_TABS = [...TABS, ...MORE_TABS];
+const VISION_TAB = ['visionSetup', 'Vision setup', 'Files a pickup step needs, added once: the HuskyLens subsystem, the pickup command, a check OpMode, and lines for Constants.java and Subsystems.java. They go in the vision package (Settings → Java export).'];
+const ALL_TABS = [...TABS, VISION_TAB, ...MORE_TABS];
+const VISION_NAMES = { constants: 'Constants-HuskyLens.java', subsystems: 'Subsystems-HuskyLens.java', camera: 'HuskyCamera.java', subsystem: 'HuskyLensSubsystem.java', command: 'VisionPickupCmd.java', check: 'HuskyLensCheck.java' };
+const VISION_HELP = {
+  constants: 'Paste inside the Constants class. Non-final, so you can tune them live (HuskyLensCheck does).',
+  subsystems: 'Three small additions to Subsystems.java, plus the robot configuration entry.',
+  camera: 'Pixel → field maths, the same as the preview here.',
+  subsystem: 'Reads the HuskyLens only while a pickup is running (each read is an I2C transaction).',
+  command: 'Look, turn and scan, then drive at the ball. The routine export uses it for every pickup step.',
+  check: 'TeleOp for checking the camera numbers with a ball at known spots. Run it before trusting a pickup.',
+};
 const POINTS_KEY = 'valleyvis.points.v1';
 
 export function createExportDialog(overlay, app) {
@@ -28,6 +39,7 @@ export function createExportDialog(overlay, app) {
   const saved = storage.get(POINTS_KEY);
   const pointOpts = { ...POINT_DEFAULTS, ...(saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}) };
   let pointResult = null;
+  let visionFile = 'command';
   const pointsBar = h('div.row.points-opts');
   const pre = h('pre.code');
   const tabsEl = h('div.code-tabs');
@@ -39,6 +51,7 @@ export function createExportDialog(overlay, app) {
     if (tab === 'geometryClass') return `${result.geometryName}.java`;
     if (tab === 'parkRoute') return 'AutoPaths-park.java';
     if (tab === 'points') return `${result.className}-points.${pointResult?.ext || 'java'}`;
+    if (tab === 'visionSetup') return VISION_NAMES[visionFile];
     if (tab === 'blueOpMode') return `${(result.blueOpMode.match(/public class (\w+)/) || [])[1] || 'BlueAuto'}.java`;
     if (tab === 'redOpMode') return `${(result.redOpMode.match(/public class (\w+)/) || [])[1] || 'RedAuto'}.java`;
     return `${result.className}-methods.java`;
@@ -55,7 +68,7 @@ export function createExportDialog(overlay, app) {
   overlay.append(modal);
   overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) close(); });
 
-  const current = () => (tab === 'points' ? pointResult?.text ?? '' : result?.[tab] ?? '');
+  const current = () => (tab === 'points' ? pointResult?.text ?? '' : tab === 'visionSetup' ? result?.vision?.[visionFile] ?? '' : result?.[tab] ?? '');
   const mimeType = () => (tab !== 'points' || pointResult?.ext === 'java' ? 'text/x-java' : pointResult.ext === 'csv' ? 'text/csv' : 'application/json');
 
   function setPointOpt(key, value) {
@@ -64,7 +77,16 @@ export function createExportDialog(overlay, app) {
     render();
   }
 
+  function renderVisionBar() {
+    pointsBar.hidden = false;
+    pointsBar.replaceChildren(...VISION_FILES.map(([id, label]) => h(`button.small${id === visionFile ? '.on' : ''}`, { 'data-vfile': id, text: label, onclick: () => { visionFile = id; render(); } })));
+  }
+
   function renderPointsBar() {
+    if (tab === 'visionSetup') {
+      renderVisionBar();
+      return;
+    }
     if (tab !== 'points') {
       pointsBar.replaceChildren();
       pointsBar.hidden = true;
@@ -96,12 +118,16 @@ export function createExportDialog(overlay, app) {
     result = generateJava(project, settings, store.resolvedBlue());
     pointResult = tab === 'points' ? pointArray(project, settings, pointOpts) : null;
     const button = ([id, label]) => h(`button${id === tab ? '.on' : ''}`, { 'data-tab': id, text: label, onclick: () => { tab = id; render(); } });
-    tabsEl.replaceChildren(...TABS.map(button), h('span.more-label', { text: 'Other formats:' }), ...MORE_TABS.map((t) => { const b = button(t); b.classList.add('more'); return b; }));
-    desc.textContent = ALL_TABS.find((t) => t[0] === tab)[2];
+    // the vision files sit with the main exports once the routine has a pickup
+    const main = result.usesVision ? [...TABS, VISION_TAB] : TABS;
+    const more = result.usesVision ? MORE_TABS : [...MORE_TABS, VISION_TAB];
+    tabsEl.replaceChildren(...main.map(button), h('span.more-label', { text: 'Other formats:' }), ...more.map((t) => { const b = button(t); b.classList.add('more'); return b; }));
+    desc.textContent = ALL_TABS.find((t) => t[0] === tab)[2] + (tab === 'visionSetup' ? ` ${VISION_HELP[visionFile]}` : '');
     renderPointsBar();
     const d = store.derived();
     const errors = d.issues.filter((i) => i.level === 'error');
-    const msgs = tab === 'points' ? [] : [...result.warnings];
+    const msgs = tab === 'points' || tab === 'visionSetup' ? [] : [...result.warnings];
+    if (tab === 'visionSetup' && !settings.camera.calibrated) msgs.push('The camera numbers have not been checked on the robot yet. Run HuskyLensCheck, copy what it shows into Settings → Camera, then tick "checked".');
     if (errors.length) msgs.unshift(`${errors.length} error(s) in the Problems tab (keep-out hits, never-ending actions, bad expressions). The code still compiles, but check them before running.`);
     notes.replaceChildren(...(msgs.length ? [h('div.warnbox', {}, msgs.map((m) => h('div', { text: `• ${m}` })))] : []));
     pre.textContent = current();

@@ -5,6 +5,7 @@ import { fillTemplate, fmtNum, javaValue } from './expr.js';
 import { parkJava } from './park.js';
 import { namedEndPose } from './poses.js';
 import { symbolTable } from './resolve.js';
+import { visionSetup } from './visionJava.js';
 
 const JAVA_KEYWORDS = new Set('abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for goto if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while true false null var record yield'.split(' '));
 
@@ -61,7 +62,7 @@ export function createContext(project, settings, resolvedBlue) {
     warnings: [],
     usesMarkers: false,
     usesJointSafe: false,
-    name: makeNames(['f', 'b', 'subsystems', 'reached', 'jointSafe', 'start', 'startingPose', 'routine', 'field', 'alliance', 'target']),
+    name: makeNames(['f', 'b', 'subsystems', 'reached', 'jointSafe', 'start', 'startingPose', 'routine', 'field', 'alliance', 'target', 'here']),
   };
 }
 
@@ -219,7 +220,9 @@ function genPath(step, ctx, state) {
   }
   useImport(ctx, 'com.pedropathing.api.Paths', 'com.pedropathing.paths.Path');
   const pathName = ctx.name(step.name, 'path');
-  const startVar = ensureStartVar(ctx, state, `${pathName}Start`);
+  // after a pickup nobody knows where the robot is until it gets there: build the path when it starts
+  const runtime = !!state.cur.runtime;
+  const startVar = runtime ? 'here' : ensureStartVar(ctx, state, `${pathName}Start`);
   const last = segs[segs.length - 1];
   const endVar = ctx.name(step.endName || `${pathName}End`, 'pathEnd');
   const named = namedEndPose(step, ctx.settings);
@@ -249,16 +252,37 @@ function genPath(step, ctx, state) {
     : `Paths.path(${segExprs.map((e) => `\n${cont}    ${e}`).join(',')})`;
   const pathCtx = { startVar, endVar, endX: last.end.x, endY: last.end.y, multiSegment: segs.length > 1, name: pathName };
   const suffix = headingSuffix(step.heading, pathCtx, ctx, cont);
-  state.paths.push(`Path ${pathName} = ${body}${suffix};`);
-  state.pathDefs.push({ name: pathName, start: startVar, end: endVar, joints, body, suffix });
-
   const drive = ctx.settings.code.drive;
+  if (runtime) {
+    useImport(ctx, 'java.util.function.Supplier', ctx.settings.code.goToImport);
+    const deeper = (t) => t.replace(/\n/g, '\n    ');
+    state.paths.push([
+      `// starts wherever the robot is when it gets here (after the pickup)`,
+      `${POSE_PAD}Supplier<Path> ${pathName} = () -> {`,
+      `${POSE_PAD}    Pose here = ${drive}.getPose();`,
+      `${POSE_PAD}    return ${deeper(body)}${deeper(suffix)};`,
+      `${POSE_PAD}};`,
+    ].join('\n'));
+    if ((step.markers || []).some((m) => (ctx.resolved?.steps.find((st) => st.id === step.id)?.geom?.localCompletion(Number(m.at) || 0).index ?? 1) === 0)) {
+      ctx.warnings.push(`"${step.name}" starts wherever the pickup left the robot, so a marker on its first segment fires by distance left as measured in the preview: close, not exact.`);
+    }
+  } else {
+    state.paths.push(`Path ${pathName} = ${body}${suffix};`);
+  }
+  state.pathDefs.push({ name: pathName, start: startVar, end: endVar, joints, body, suffix, runtime });
+
   const speed = step.maxSpeed === null || step.maxSpeed === undefined || step.maxSpeed === '' ? null : ctx.jv(step.maxSpeed);
   const during = (step.during || []).map((r) => commandExpr(r, ctx));
   const markers = (step.markers || []).map((m) => markerSequence(m, step, ctx));
   const hasTimeout = !(step.timeout === null || step.timeout === undefined || step.timeout === '');
   const ref = pathRef(pathName);
-  if (!during.length && !markers.length && !hasTimeout) {
+  if (runtime) {
+    let expr = `new GoToCmd(${drive}, ${ref}${speed ? `, ${speed}` : ''})`;
+    if (hasTimeout) expr += `\n        .withTimeout(${ctx.jv(step.timeout)})`;
+    const parallel = [...during, ...markers];
+    if (parallel.length) expr += `\n        .deadlineWith(${argList(parallel, '                ')})`;
+    state.builder.push(`b.command(${expr});`);
+  } else if (!during.length && !markers.length && !hasTimeout) {
     state.builder.push(speed ? `b.follow(${ref}, ${speed});` : `b.follow(${ref});`);
   } else {
     let expr = `${drive}.follow(${ref}${speed ? `, ${speed}` : ''})`;
@@ -302,13 +326,34 @@ function genTurn(step, ctx, state) {
   const heading = `${poseOf(ctx, state.cur.x, state.cur.y, step.h ?? 0)}.heading()`;
   const expr = fillTemplate(ctx.settings.code.turnTemplate, { drive: ctx.settings.code.drive, heading });
   state.builder.push(`b.command(${expr});`);
-  state.cur = { var: null, x: state.cur.x, y: state.cur.y, h: step.h ?? 0 };
+  state.cur = { ...state.cur, var: null, h: step.h ?? 0 };
+}
+
+function genVision(step, ctx, state) {
+  const code = ctx.settings.code;
+  useImport(ctx, `${code.visionPackage}.VisionPickupCmd`, `${code.visionPackage}.HuskyCamera`);
+  const areaName = ctx.name(`${step.name || 'pickup'} area`, 'pickupArea');
+  const pts = (step.area || []).map((p) => poseOf(ctx, p.x, p.y, 0));
+  state.poses.push(`Pose[] ${areaName} = {${pts.map((q) => `\n${POSE_PAD}        ${q},`).join('')}\n${POSE_PAD}};`);
+  state.areaDefs.push({ name: areaName, pts });
+  const ball = step.target === 'nectar' ? 'NECTAR' : 'POLLEN';
+  const speed = step.maxSpeed === null || step.maxSpeed === undefined || step.maxSpeed === '' ? 'PedroSubsystem.NO_SPEED_LIMIT' : ctx.jv(step.maxSpeed);
+  const ballIn = String(ctx.settings.camera?.ballInJava || '').trim();
+  const args = [code.drive, code.husky, `HuskyCamera.Ball.${ball}`, 'alliance()', pathRef(areaName), ctx.jv(step.reach ?? 'L/2'), speed, ctx.jv(step.scan ?? 60), ...(ballIn ? [`() -> (${ballIn})`] : [])];
+  let expr = `new VisionPickupCmd(${args.slice(0, 4).join(', ')},\n        ${args.slice(4).join(', ')})`;
+  expr += `\n        .withTimeout(${ctx.jv(step.timeout ?? 4)})`;
+  const during = (step.during || []).map((r) => commandExpr(r, ctx));
+  if (during.length) expr += `\n        .deadlineWith(${argList(during, '                ')})`;
+  state.builder.push(`// ${step.name || 'pickup'}: find ${step.target === 'nectar' ? 'our nectar' : 'pollen'} with the HuskyLens and drive to it`);
+  state.builder.push(`b.command(${expr});`);
+  state.cur = { var: null, runtime: true, x: 0, y: 0, h: 0 };
 }
 
 function genStep(step, ctx, state) {
   if (step.type === 'path') genPath(step, ctx, state);
   else if (step.type === 'action') genAction(step, ctx, state);
   else if (step.type === 'turn') genTurn(step, ctx, state);
+  else if (step.type === 'vision') genVision(step, ctx, state);
   else if (step.type === 'wait') state.builder.push(`b.waitFor(${ctx.jv(step.seconds ?? 0)});`);
   else if (step.type === 'java') state.builder.push(...statements(step.code).length ? [String(step.code).trim()] : ['// (empty Java step)']);
 }
@@ -352,7 +397,9 @@ function knownClasses(settings) {
     'com.pedropathing.api.Paths', 'com.pedropathing.api.PoseFactory', 'com.pedropathing.math.Pose',
     'com.pedropathing.paths.Path', 'com.pedropathing.paths.interpolator.Interpolator', 'com.pedropathing.follower.Follower',
     'com.vcs.valleylib.core.command.Command', 'com.vcs.valleylib.core.command.Commands', 'com.vcs.valleylib.ftc.pedro.PedroAutoDsl',
-    settings.code.constantsImport,
+    'com.vcs.valleylib.ftc.pedro.PedroSubsystem', 'java.util.function.Supplier',
+    settings.code.constantsImport, settings.code.goToImport,
+    `${settings.code.visionPackage}.VisionPickupCmd`, `${settings.code.visionPackage}.HuskyCamera`,
     ...splitList(settings.code.turnImports),
     ...splitList(settings.code.extraImports),
     ...(settings.commands || []).flatMap((c) => splitList(c.imports)),
@@ -370,7 +417,7 @@ export function generateBody(project, settings, resolvedBlue) {
   const ctx = createContext(project, settings, resolvedBlue);
   useImport(ctx, 'com.pedropathing.api.PoseFactory', 'com.pedropathing.math.Pose', 'com.vcs.valleylib.core.command.Command', 'com.vcs.valleylib.ftc.pedro.PedroAutoDsl');
   const s = project.start || { x: 72, y: 72, h: 0 };
-  const state = { poses: ['Pose start = startingPose();'], paths: [], builder: [], poseDefs: [], pathDefs: [], cur: { var: 'start', x: s.x, y: s.y, h: s.h ?? 0 } };
+  const state = { poses: ['Pose start = startingPose();'], paths: [], builder: [], poseDefs: [], pathDefs: [], areaDefs: [], cur: { var: 'start', x: s.x, y: s.y, h: s.h ?? 0 } };
   for (const step of project.steps || []) genStep(step, ctx, state);
   const startExpr = `.of(${ctx.jv(s.x)}, ${ctx.jv(s.y)}, ${ctx.jv(s.h ?? 0)})`;
 
@@ -404,7 +451,11 @@ export function generateBody(project, settings, resolvedBlue) {
   for (const [simple, fqcn] of Object.entries(knownClasses(settings))) {
     if (new RegExp(`(^|[^\\w.])${simple}\\b`).test(all)) useImport(ctx, fqcn);
   }
-  const model = { startExpr, poseDefs: state.poseDefs, pathDefs: state.pathDefs, builder: state.builder, usesMarkers: ctx.usesMarkers, usesJointSafe: ctx.usesJointSafe, ctx };
+  if (state.areaDefs.length) {
+    ctx.warnings.push(`Pickups need the HuskyLens files once: Export → Vision setup (${settings.code.visionPackage}), the Constants lines, and "${settings.code.husky}" in Subsystems.java.`);
+    if (!settings.camera?.calibrated) ctx.warnings.push('The camera numbers have not been checked on the robot yet (Settings → Camera). Run HuskyLensCheck first, or the robot will drive to the wrong spot.');
+  }
+  const model = { startExpr, poseDefs: state.poseDefs, pathDefs: state.pathDefs, areaDefs: state.areaDefs, builder: state.builder, usesMarkers: ctx.usesMarkers, usesJointSafe: ctx.usesJointSafe, ctx };
   return { startingPose, routine, helper, imports: [...ctx.imports].sort(), warnings: ctx.warnings, model };
 }
 
@@ -426,15 +477,23 @@ function generateTeamLayout(project, settings, body, className) {
   const geometryName = /Routine$/.test(className) ? className.replace(/Routine$/, 'Geometry') : `${className}Geometry`;
   const geometryPackage = settings.code.geometryPackage || settings.code.routinePackage;
   const pad = '        ';
+  const runtimeNames = new Set(model.pathDefs.filter((d) => d.runtime).map((d) => d.name));
 
   const poseMethods = [
     `    public static Pose startingPose(PoseFactory f) {\n        return f${model.startExpr};\n    }`,
     ...model.poseDefs.map((d) => `    public static Pose ${d.name}(PoseFactory f) {\n        return ${d.expr};\n    }`),
   ];
   const poseCall = (name) => (name === 'start' ? 'startingPose(f)' : `${name}(f)`);
+  const areaMethods = model.areaDefs.map((a) => [
+    '    /** Search area for a pickup: balls outside it are ignored. */',
+    `    public static Pose[] ${a.name}(PoseFactory f) {`,
+    `${pad}return new Pose[] {${a.pts.map((q) => `\n${pad}        ${q},`).join('')}\n${pad}};`,
+    '    }',
+  ].join('\n'));
   const pathMethods = model.pathDefs.map((d) => [
-    `    public static Path ${d.name}(PoseFactory f) {`,
-    `${pad}Pose ${d.start} = ${poseCall(d.start)};`,
+    ...(d.runtime ? ['    /** Starts at {@code here}: wherever the robot is after the pickup before it. */'] : []),
+    `    public static Path ${d.name}(PoseFactory f${d.runtime ? ', Pose here' : ''}) {`,
+    ...(d.runtime ? [] : [`${pad}Pose ${d.start} = ${poseCall(d.start)};`]),
     `${pad}Pose ${d.end} = ${poseCall(d.end)};`,
     ...d.joints.map((j) => `${pad}Pose ${j.name} = ${j.expr};`),
     `${pad}return ${d.body}${d.suffix};`,
@@ -445,6 +504,7 @@ function generateTeamLayout(project, settings, body, className) {
     '',
     '    /* ----- Poses ----- */',
     poseMethods.join('\n\n'),
+    ...(areaMethods.length ? ['', '    /* ----- Pickup search areas ----- */', areaMethods.join('\n\n')] : []),
     ...(pathMethods.length ? ['', '    /* ----- Paths ----- */', pathMethods.join('\n\n')] : []),
     ...(model.usesJointSafe ? ['', jointSafeHelper(model.ctx)] : []),
   ].join('\n');
@@ -473,7 +533,7 @@ function generateTeamLayout(project, settings, body, className) {
     '    protected Command routine() {',
     `        PoseFactory f = ${settings.code.poseFactory};`,
     `        return PedroAutoDsl.auto(${settings.code.drive}, b -> {`,
-    ...model.builder.map((l) => padLines(renderPathRefs(l, (name) => `${geometryName}.${name}(f)`), B_PAD)),
+    ...model.builder.map((l) => padLines(renderPathRefs(l, (name) => (runtimeNames.has(name) ? `() -> ${geometryName}.${name}(f, ${settings.code.drive}.getPose())` : `${geometryName}.${name}(f)`)), B_PAD)),
     '        });',
     '    }',
     ...(model.usesMarkers ? ['', reachedHelper(model.ctx)] : []),
@@ -568,6 +628,8 @@ export function generateJava(project, settings, resolvedBlue) {
     blueOpMode: opMode('blue'),
     redOpMode: opMode('red'),
     parkRoute: parkJava(settings),
+    vision: visionSetup(settings),
+    usesVision: body.model.areaDefs.length > 0,
     imports: body.imports,
     warnings: body.warnings,
   };

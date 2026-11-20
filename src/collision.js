@@ -102,6 +102,7 @@ function turnPoses(m) {
 }
 
 export function itemPoses(item) {
+  if (item.motion.kind === 'seq') return item.motion.parts.flatMap((part) => itemPoses(part));
   if (item.motion.kind === 'path') return pathPoses(item.motion);
   if (item.motion.kind === 'turn') return turnPoses(item.motion);
   return [item.motion.pose];
@@ -152,6 +153,16 @@ export function checkCollisions(sim, resolved, settings) {
     for (const leg of sim.park.legs) checkPoses(pathPoses(leg), resolved.zones, settings, sink, 'park');
   }
   const violations = [...sink.values()].filter((r) => r.hits.length).map((r) => ({ ...r, hits: thin(r.hits) }));
+  // the pickup drives straight at whatever ball it sees, so a ball near a zone pulls the robot in
+  const areaIssues = [];
+  for (const step of resolved.steps) {
+    if (step.type !== 'vision' || step.area.length < 3) continue;
+    for (const z of resolved.zones) {
+      if (!z.enabled) continue;
+      const d = zoneDistance(step.area, z);
+      if (d < z.clearance - 1e-6) areaIssues.push({ level: 'warn', stepId: step.id, zoneId: z.id, msg: `The search area ${d === 0 ? 'overlaps' : `comes within ${d.toFixed(1)} in of`} "${z.name}". The pickup drives straight at the ball, so a ball there would pull the robot into it. Pull the area's corners in.` });
+    }
+  }
   // closest the robot ever gets to each zone, and on which step
   const closest = {};
   for (const r of sink.values()) {
@@ -166,5 +177,6 @@ export function checkCollisions(sim, resolved, settings) {
       ? `${v.stepId === 'park' ? 'Park route' : v.stepId === 'start' ? 'Start pose' : 'Robot'} goes ${v.overrun.toFixed(1)} in past the field wall.`
       : `${v.stepId === 'park' ? 'Park route' : v.stepId === 'start' ? 'Start pose' : 'Robot'} comes within ${v.minDist.toFixed(1)} in of "${v.zoneName}" (needs ${v.clearance} in).`,
   }));
+  issues.push(...areaIssues);
   return { violations, issues, closest };
 }

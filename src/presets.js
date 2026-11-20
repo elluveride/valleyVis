@@ -28,7 +28,8 @@ function upRoutine() {
       { id: 'u1', type: 'action', label: 'Shoot preloaded', cmds: [shoot(4000)], timeout: null },
       {
         id: 'u2', type: 'path', name: 'toGarden', endName: 'intakeFromGarden',
-        segments: [{ type: 'curve', controls: [{ x: 108, y: 120 }], end: { x: '144-L/2', y: '144-W/2' } }],
+        // UpGeometry at 3ce19d4: middleGarden (90, 110) and laterGarden (120, 144-W/2) as control points
+        segments: [{ type: 'curve', controls: [{ x: 90, y: 110 }, { x: 120, y: '144-W/2' }], end: { x: '140-L/2', y: '144-W/2' } }],
         endH: 0,
         heading: {
           mode: 'piecewise',
@@ -38,11 +39,11 @@ function upRoutine() {
             { until: 1, mode: 'constant', hold: 'end' },
           ],
         },
-        maxSpeed: null, timeout: null, during: [intakeTransfer()], markers: [],
+        maxSpeed: null, timeout: 6, during: [intakeTransfer()], markers: [],
       },
       {
         id: 'u3', type: 'path', name: 'readyShoot1', endName: 'readyToShoot',
-        segments: [{ type: 'line', controls: [], end: { x: 96, y: 108 } }],
+        segments: [{ type: 'line', controls: [], end: { x: 90, y: 126 } }],
         endH: -90, heading: piecewiseHold(0.2, 0.8),
         maxSpeed: null, timeout: null, during: [], markers: [],
       },
@@ -87,7 +88,7 @@ function soloRoutine() {
         id: 's2', type: 'path', name: 'toGarden', endName: 'intakeFromGarden',
         segments: [{ type: 'line', controls: [], end: { x: '144-L/2', y: '144-W/2' } }],
         endH: 0, heading: { mode: 'linear', endT: 1, long: false },
-        maxSpeed: null, timeout: null, during: [intakeTransfer()], markers: [],
+        maxSpeed: null, timeout: 6, during: [intakeTransfer()], markers: [],
       },
       {
         id: 's3', type: 'path', name: 'underpassFromGarden', endName: 'flippedShoot',

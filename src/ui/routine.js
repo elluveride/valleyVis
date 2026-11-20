@@ -15,6 +15,7 @@ const STEP_META = {
   wait: { icon: '⏱', label: 'Wait', color: '#64748b' },
   turn: { icon: '⟳', label: 'Turn', color: '#c084fc' },
   java: { icon: '{ }', label: 'Java', color: '#94a3b8' },
+  vision: { icon: '◎', label: 'Pickup', color: '#22d3ee' },
 };
 
 const HEADING_MODES = [
@@ -48,6 +49,7 @@ export function stepTitle(step) {
   if (step.type === 'action') return step.label || (step.cmds || []).map((c) => c.lib).join(' + ') || 'action';
   if (step.type === 'wait') return `Wait ${step.seconds ?? 0} s`;
   if (step.type === 'turn') return `Turn to ${step.h ?? 0}°`;
+  if (step.type === 'vision') return `${step.target || 'pollen'} (${step.name || 'pickup'})`;
   return 'Java';
 }
 
@@ -333,12 +335,108 @@ function actionEditor(app, step, m) {
   return box;
 }
 
+/** A square search area of side `side` around a point, kept on the field. */
+export function squareAround(p, side = 36) {
+  const r = side / 2;
+  const cx = Math.min(144 - r, Math.max(r, p.x));
+  const cy = Math.min(144 - r, Math.max(r, p.y));
+  const q = (v) => roundTo(v, 0.5);
+  return [{ x: q(cx - r), y: q(cy - r) }, { x: q(cx + r), y: q(cy - r) }, { x: q(cx + r), y: q(cy + r) }, { x: q(cx - r), y: q(cy + r) }];
+}
+
+function visionEditor(app, step, m, item, rstep) {
+  const key = step.id;
+  const numVal = app.numVal;
+  const body = [];
+  body.push(h('div.hint', { text: 'The robot looks with the HuskyLens, turns and scans if it sees nothing, then drives at the nearest ball of this color inside the search area and stops when the ball reaches the intake. Practice spots are only for the preview: on the field it goes wherever the ball really is.' }));
+  body.push(h('div.grid2', {}, [
+    fld('Name (Java)', textInput(app, `${key}.name`, step.name, (v, o) => m((s) => { s.name = v; }, o), { mono: true })),
+    fld('Pick up', selectInput(`${key}.target`, [['pollen', 'Pollen (yellow, 2.8 in)'], ['nectar', 'Nectar (alliance color, 3.6 in)']], step.target, (v) => m((s) => { s.target = v; }))),
+  ]));
+
+  body.push(h('div.section-title', { text: 'Practice spots (blue frame)' }));
+  const spots = h('div.sub');
+  (step.spots || []).forEach((sp, i) => {
+    spots.append(h('div.grid3', {}, [
+      fld(`Spot ${i + 1} x`, exprInput(app, `${key}.sp${i}x`, sp.x, (v, o) => m((s) => { s.spots[i].x = v; }, o))),
+      fld('y', exprInput(app, `${key}.sp${i}y`, sp.y, (v, o) => m((s) => { s.spots[i].y = v; }, o))),
+      h('div.fld', {}, [h('span', { text: ' ' }), h('div.row', {}, [
+        h(`button.small${(step.spot || 0) === i ? '.on' : ''}`, { 'data-key': `${key}.sp${i}use`, text: (step.spot || 0) === i ? 'previewing' : 'preview', onclick: () => m((s) => { s.spot = i; }) }),
+        step.spots.length > 1 ? h('button.ghost', { title: 'Remove spot', text: '✕', onclick: () => m((s) => { s.spots.splice(i, 1); s.spot = Math.min(s.spot || 0, s.spots.length - 1); }) }) : null,
+      ])]),
+    ]));
+  });
+  spots.append(h('button.small', { text: '+ practice spot', onclick: () => m((s) => {
+    const a = s.area || [];
+    const cx = a.length ? a.reduce((t, p) => t + numVal(p.x), 0) / a.length : 72;
+    const cy = a.length ? a.reduce((t, p) => t + numVal(p.y), 0) / a.length : 72;
+    s.spots.push({ x: roundTo(cx + 4 * s.spots.length, 0.5), y: roundTo(cy - 4 * s.spots.length, 0.5) });
+    s.spot = s.spots.length - 1;
+  }) }));
+  body.push(spots);
+
+  body.push(h('div.section-title', { text: 'Search area (blue frame)' }));
+  const area = h('div.sub');
+  (step.area || []).forEach((p, i) => {
+    area.append(h('div.grid3', {}, [
+      fld(`Corner ${i + 1} x`, exprInput(app, `${key}.a${i}x`, p.x, (v, o) => m((s) => { s.area[i].x = v; }, o))),
+      fld('y', exprInput(app, `${key}.a${i}y`, p.y, (v, o) => m((s) => { s.area[i].y = v; }, o))),
+      h('div.fld', {}, [h('span', { text: ' ' }), step.area.length > 3 ? h('button.ghost', { title: 'Remove corner', text: '✕', onclick: () => m((s) => { s.area.splice(i, 1); }) }) : h('span')]),
+    ]));
+  });
+  area.append(h('div.add-row', {}, [
+    h('button.small', { text: '+ corner', onclick: () => m((s) => {
+      const a = s.area;
+      const p = a[a.length - 1];
+      const q = a[0];
+      a.push({ x: roundTo((numVal(p.x) + numVal(q.x)) / 2, 0.5), y: roundTo((numVal(p.y) + numVal(q.y)) / 2, 0.5) });
+    }) }),
+    h('button.small', { text: 'Square around the previewed spot', onclick: () => m((s) => {
+      const sp = s.spots[s.spot || 0] || { x: 72, y: 72 };
+      s.area = squareAround({ x: numVal(sp.x), y: numVal(sp.y) });
+    }) }),
+  ]));
+  area.append(h('div.hint', { text: 'Balls outside this area are ignored (other robots\' balls, ones in your own goal). Drag the corners on the field.' }));
+  body.push(area);
+
+  body.push(h('div.section-title', { text: 'Pickup' }));
+  body.push(h('div.grid2', {}, [
+    fld('Stop with the ball this far from centre (in)', exprInput(app, `${key}.reach`, step.reach ?? 'L/2', (v, o) => m((s) => { s.reach = v; }, o)), 'Usually L/2: the ball is at the front bumper, where the intake is'),
+    fld('Scan ±° when nothing is seen', exprInput(app, `${key}.scan`, step.scan ?? 60, (v, o) => m((s) => { s.scan = v; }, o))),
+    fld('Max speed (0–1, blank = full)', numInput(app, `${key}.speed`, step.maxSpeed ?? '', (v, o) => m((s) => { s.maxSpeed = v; }, o), { step: 0.05, min: 0.05, max: 1, allowEmpty: true })),
+    fld('Give up after (s)', numInput(app, `${key}.timeout`, step.timeout ?? 4, (v, o) => m((s) => { s.timeout = v ?? 4; }, o), { step: 0.25, min: 0.25 })),
+  ]));
+
+  body.push(h('div.section-title', { text: 'While picking up (deadlineWith)' }));
+  const during = h('div.sub');
+  (step.during || []).forEach((r, i) => during.append(cmdRefEditor(app, `${key}.during${i}`, r, (fn, o) => m((s) => fn(s.during[i]), o), () => m((s) => { s.during.splice(i, 1); }))));
+  during.append(h('button.small', { text: '+ run during pickup', onclick: () => m((s) => {
+    const lib = app.store.state.settings.commands;
+    const pick = lib.find((c) => c.id === 'intakeTransfer') || lib[0];
+    (s.during = s.during || []).push({ lib: pick?.id, params: {} });
+  }) }));
+  body.push(during);
+
+  if (rstep && item) {
+    const plan = rstep.plan;
+    const turns = plan.phases.filter((ph) => ph.kind === 'turn').length;
+    const what = !plan.inArea ? 'previewed spot is outside the area' : plan.found ? (turns ? `seen after ${turns} turn${turns === 1 ? '' : 's'}` : 'seen straight away') : 'not seen';
+    body.push(h('div.stat', { text: `${what} · ${(item.t1 - item.t0).toFixed(2)} s here · up to ${rstep.timeout.toFixed(2)} s if it has to give up` }));
+  }
+  body.push(h('div.add-row', {}, [
+    h('button.small', { text: 'Camera settings', 'data-key': `${key}.camset`, onclick: () => app.openSettings('camera') }),
+    h('button.small', { text: 'Vision setup Java', 'data-key': `${key}.vsetup`, onclick: () => app.openExport('visionSetup') }),
+  ]));
+  return body;
+}
+
 function stepEditor(app, step, d) {
   const m = mut(app, step.id);
   const item = d.sim.items.find((i) => i.stepId === step.id);
   const rstep = d.resolved.steps.find((s) => s.id === step.id);
   if (step.type === 'path') return pathEditor(app, step, m, item, rstep);
   if (step.type === 'action') return actionEditor(app, step, m);
+  if (step.type === 'vision') return visionEditor(app, step, m, item, rstep);
   if (step.type === 'wait') return [fld('Seconds', exprInput(app, `${step.id}.sec`, step.seconds, (v, o) => m((s) => { s.seconds = v; }, o)))];
   if (step.type === 'turn') {
     return [
@@ -433,6 +531,17 @@ function newStep(app, type) {
   } else if (type === 'action') step = { id, type: 'action', label: '', cmds: [{ lib: lib[0]?.id, params: {} }], timeout: null };
   else if (type === 'wait') step = { id, type: 'wait', seconds: 1 };
   else if (type === 'turn') step = { id, type: 'turn', h: Math.round(pose.hDeg + 90) };
+  else if (type === 'vision') {
+    const k = steps.filter((s) => s.type === 'vision').length + 1;
+    const hr = (pose.hDeg * Math.PI) / 180;
+    const ahead = { x: roundTo(Math.min(138, Math.max(6, pose.x + Math.cos(hr) * 30)), 0.5), y: roundTo(Math.min(138, Math.max(6, pose.y + Math.sin(hr) * 30)), 0.5) };
+    const pick = lib.find((c) => c.id === 'intakeTransfer');
+    step = {
+      id, type: 'vision', name: `pickup${k}`, label: '', target: 'pollen',
+      spots: [ahead], spot: 0, area: squareAround(ahead), reach: 'L/2', maxSpeed: 0.6, timeout: 4, scan: 60,
+      during: pick ? [{ lib: pick.id, params: {} }] : [],
+    };
+  }
   else step = { id, type: 'java', code: '// runs inside PedroAutoDsl.auto(..., b -> { ... })\nb.waitUntilDriveIdle();', duration: 0 };
   store.update((pr) => { pr.steps.splice(insertAt, 0, step); });
   store.setUi({ selectedStepId: id, selectedZoneId: null });
@@ -543,10 +652,12 @@ function parkCard(app, d) {
 
   body.append(h('div.section-title', { text: 'Corridors' }));
   body.append(h('div.grid2', {}, [
-    num('middleX', 'Middle corridor x', P.middleX, (pk, v) => { pk.middleX = v; }),
+    fld('Middle corridor: drive across to x', exprInput(app, 'park.middleX', P.middleX, set((pk, v) => { pk.middleX = v; })), 'The first leg goes straight along y to this x'),
+    num('middleEndX', 'Middle corridor: x at the approach line', P.middleEndX, (pk, v) => { pk.middleEndX = v; }),
     num('outerX', 'Outer corridor x', P.outerX, (pk, v) => { pk.outerX = v; }),
     num('middleMaxX', 'Use the middle one when the robot ends at x below', P.middleMaxX, (pk, v) => { pk.middleMaxX = v; }, 'Decided in the blue frame, so red mirrors blue'),
     num('approachY', 'Drive the corridor to y', P.approachY, (pk, v) => { pk.approachY = v; }),
+    fld('Speed to the corridor (0–1, blank = full)', numInput(app, 'park.firstLegSpeed', P.firstLegSpeed ?? '', set((pk, v) => { pk.firstLegSpeed = v; }), { step: 0.05, min: 0.05, max: 1, allowEmpty: true }), 'maxPathSpeed on the first leg, like the team code'),
   ]));
   body.append(h('div.section-title', { text: 'Headings along the way' }));
   body.append(h('div.grid2', {}, [
@@ -559,13 +670,13 @@ function parkCard(app, d) {
     body.append(h('div.stat', { text: `${park.corridor} corridor · ${park.legs.length} leg${park.legs.length === 1 ? '' : 's'} · drive ${driving.toFixed(2)} s · AutoBase allows ${settings.match.parkTimeout} s` }));
   }
   if (P.edited) {
-    body.append(h('div.warnbox', { text: 'Edited. The robot only drives this after you paste the export into AutoPaths.java (Export → Park route). The exported version also starts from where the robot really is on red.' }));
+    body.append(h('div.warnbox', { text: 'Edited. The robot only drives this after you paste the export into AutoPaths.java (Export → Park route).' }));
     body.append(h('div.add-row', {}, [
       h('button.small', { text: 'Show the Java', 'data-key': 'park.export', onclick: () => app.openExport('parkRoute') }),
       h('button.small', { text: 'Reset to team code', 'data-key': 'park.reset', onclick: () => store.updateSettings((st) => { st.park = cloneDeep(DEFAULT_SETTINGS.park); }) }),
     ]));
   } else {
-    body.append(h('div.hint', { text: 'This is AutoPaths.routeToPark as your code has it now (on red it starts its first leg from the wrong spot). Change anything to edit it.' }));
+    body.append(h('div.hint', { text: 'This is AutoPaths.routeToPark as your code has it (team commit of Nov 17): across at 75% speed, down the corridor holding the heading, then in. Change anything to edit it.' }));
   }
   for (const iss of issues) body.append(h(`div.issue.${iss.level}`, {}, [h(`span.dot.${iss.level === 'error' ? 'err' : iss.level === 'warn' ? 'warn' : 'info'}`), h('span', { text: iss.msg })]));
   card.append(body);
@@ -590,6 +701,7 @@ export function renderRoutineTab(container, app) {
     h('button', { text: '+ Action', onclick: () => newStep(app, 'action') }),
     h('button', { text: '+ Wait', onclick: () => newStep(app, 'wait') }),
     h('button', { text: '+ Turn', onclick: () => newStep(app, 'turn') }),
+    h('button', { text: '+ Pickup', title: 'Find a ball with the HuskyLens and drive to it', onclick: () => newStep(app, 'vision') }),
     h('button', { text: '+ Java', onclick: () => newStep(app, 'java') }),
   ]));
   container.append(h('div.hint', { html: 'Field: drag ● points and ■ control points, drag the knob to aim, <b>double-click</b> a selected path to add a control point, <b>right-click</b> a control point to remove it. <b>Shift</b> = no snapping. <b>Space</b> = play.' }));

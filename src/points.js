@@ -22,6 +22,11 @@ export function waypointRows(resolved, sim, { controls = false, park = false } =
   const rows = [row('start', resolved.start.x, resolved.start.y, resolved.start.h)];
   for (const step of resolved.steps) {
     if (step.type === 'turn') rows.push(row(`turn (step ${step.index + 1})`, step.end.x, step.end.y, step.end.h));
+    if (step.type === 'vision') {
+      const name = step.raw.name || `pickup ${step.index + 1}`;
+      step.spots.forEach((sp, i) => rows.push(row(`${name} practice spot ${i + 1} (ball)`, sp.x, sp.y, null)));
+      rows.push(row(`${name} (stops here in the preview; on the robot it depends on the ball)`, step.end.x, step.end.y, step.end.h));
+    }
     if (step.type !== 'path' || !step.raw.segments?.length) continue;
     const name = step.raw.name || `path ${step.index + 1}`;
     step.segPts.forEach((pts, i) => {
@@ -83,11 +88,15 @@ export function sampledRows(resolved, sim, { spacing = 3, park = false } = {}) {
   for (const item of sim.items) {
     const step = resolved.steps[item.index];
     const label = step?.raw?.name || `step ${item.index + 1}`;
-    if (item.motion.kind === 'path') samplePath(rows, label, item.motion.geom, item.motion.interp, item.motion.prof, item.t0, gap);
-    else if (item.motion.kind === 'turn') {
-      const m = item.motion;
-      rows.push(row(`turn (step ${item.index + 1})`, m.from.x, m.from.y, m.from.h + m.delta, item.t0 + m.moveDur));
-    }
+    const one = (part, pathLabel, turnLabel) => {
+      if (part.motion.kind === 'path') samplePath(rows, pathLabel, part.motion.geom, part.motion.interp, part.motion.prof, part.t0, gap);
+      else if (part.motion.kind === 'turn') {
+        const m = part.motion;
+        rows.push(row(turnLabel, m.from.x, m.from.y, m.from.h + m.delta, part.t0 + m.moveDur));
+      }
+    };
+    if (item.motion.kind === 'seq') item.motion.parts.filter((p) => p.t0 < item.t1 - 1e-9).forEach((p) => one(p, `${label} (preview)`, `${label} scan turn (preview)`));
+    else one(item, label, `turn (step ${item.index + 1})`);
   }
   if (park && sim.park) {
     for (const leg of sim.park.legs) samplePath(rows, 'park', leg.geom, leg.interp, leg.prof, leg.t0, gap);
@@ -103,7 +112,7 @@ const javaNum = (v) => {
 
 function asJava(rows, { name, sampled, header }) {
   const cols = sampled ? '{x, y, heading°, seconds}' : '{x, y, heading°}';
-  const nanNote = rows.some((r) => r.h === null) ? ' Control points have no heading (NaN).' : '';
+  const nanNote = rows.some((r) => r.h === null) ? ' Control points and ball spots have no heading (NaN).' : '';
   const width = Math.max(...rows.map((r) => `{${[r.x, r.y, r.h === null ? 'Double.NaN' : r.h, ...(sampled ? [r.t] : [])].map((v) => (v === 'Double.NaN' ? v : javaNum(v))).join(', ')}},`.length));
   return [
     `// ${header}`,
@@ -125,7 +134,7 @@ function asPoses(rows, { name, header }) {
     `// ${header}`,
     '// f is field() (PoseFactory), so the same array works for blue and red.',
     `Pose[] ${name} = {`,
-    ...rows.map((r, i) => `        ${calls[i].padEnd(width)} // ${r.label}${r.h === null ? ' (control point, no heading)' : ''}`),
+    ...rows.map((r, i) => `        ${calls[i].padEnd(width)} // ${r.label}${r.h === null ? ' (no heading)' : ''}`),
     '};',
     '',
   ].join('\n');
